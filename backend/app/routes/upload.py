@@ -101,7 +101,7 @@ def recent_uploads(
             "id": row["id"],
             "filename": row["file_name"],
             "status": row["status"],
-            "uploaded_at": row["created_at"]
+            "created_at": row["created_at"]
         }
         for row in result
     ]

@@ -9,7 +9,7 @@ export default function DashboardPage() {
   const API = process.env.NEXT_PUBLIC_API_URL;
 
   const [uploads, setUploads] = useState<any[]>([]);
-
+  console.log("Uploads state:", uploads);
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
@@ -156,11 +156,9 @@ export default function DashboardPage() {
                 </h3>
 
                 <p className="text-sm text-slate-500">
-
-                  {file.uploaded_at
-                    ? new Date(file.uploaded_at).toLocaleString()
+                  {file.created_at
+                    ? new Date(file.created_at).toLocaleString()
                     : "Just now"}
-
                 </p>
 
               </div>
