@@ -1,98 +1,157 @@
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from app.db_mysql import get_db
+from app.ws.broadcaster import broadcast_stats
+
 import os
 import uuid
 from datetime import datetime
 
-from app.db import cv_collection
-from app.ws.broadcaster import broadcast_stats
-
-router = APIRouter(prefix="/upload")
+router = APIRouter()
 
 UPLOAD_DIR = "uploads"
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# =========================================
+# BULK UPLOAD CVS
+# =========================================
+@router.post("/upload/cvs")
+async def upload_cvs(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
 
-# UPLOAD CVS
-@router.post("/cvs")
-async def upload_cvs(files: list[UploadFile] = File(...)):
-
-    if len(files) > 20:
-        return {"error": "Max 20 files allowed"}
-
-    saved = []
+    uploaded = []
 
     for file in files:
-        file_id = str(uuid.uuid4())
 
-        file_path = f"{UPLOAD_DIR}/{file_id}_{file.filename}"
+        unique_name = f"{uuid.uuid4()}_{file.filename}"
 
-        content = await file.read()
+        file_path = os.path.join(
+            UPLOAD_DIR,
+            unique_name
+        )
 
-        # save file
         with open(file_path, "wb") as f:
-            f.write(content)
+            f.write(await file.read())
 
-        # save mongodb
-        await cv_collection.insert_one({
-            "file_id": file_id,
-            "filename": file.filename,
-            "file_path": file_path,
-            "status": "queued",
-            "uploaded_at": datetime.utcnow()
+        db.execute(text("""
+            INSERT INTO uploads
+            (
+                batch_id,
+                file_name,
+                file_url,
+                status,
+                created_at
+            )
+            VALUES
+            (
+                :batch_id,
+                :file_name,
+                :file_url,
+                :status,
+                :created_at
+            )
+        """), {
+            "batch_id": str(uuid.uuid4()),
+            "file_name": file.filename,
+            "file_url": file_path,
+            "status": "Uploaded",
+            "created_at": datetime.utcnow()
         })
 
-        saved.append(file.filename)
+        uploaded.append(file.filename)
 
-    # websocket live update
+    db.commit()
+
     await broadcast_stats()
 
     return {
-        "message": "Uploaded successfully",
-        "count": len(saved)
+        "success": True,
+        "count": len(uploaded),
+        "files": uploaded
     }
 
 
+# =========================================
 # RECENT UPLOADS
-@router.get("/recent")
-async def recent():
+# =========================================
+@router.get("/upload/recent")
+def recent_uploads(
+    db: Session = Depends(get_db)
+):
 
-    data = await cv_collection.find() \
-        .sort("uploaded_at", -1) \
-        .limit(10) \
-        .to_list(10)
+    result = db.execute(text("""
+        SELECT
+            id,
+            batch_id,
+            file_name,
+            file_url,
+            status,
+            created_at
+        FROM uploads
+        ORDER BY created_at DESC
+        LIMIT 10
+    """)).mappings().all()
 
-    for item in data:
-        item["_id"] = str(item["_id"])
-
-    return data
-
-
-# TOTAL COUNT
-@router.get("/stats/total")
-async def total():
-
-    count = await cv_collection.count_documents({})
-
-    return {"count": count}
-
-
-# PENDING COUNT
-@router.get("/stats/pending")
-async def pending():
-
-    count = await cv_collection.count_documents({
-        "status": "queued"
-    })
-
-    return {"count": count}
+    return [
+        {
+            "id": row["id"],
+            "filename": row["file_name"],
+            "status": row["status"],
+            "uploaded_at": row["created_at"]
+        }
+        for row in result
+    ]
 
 
-# SHORTLISTED COUNT
-@router.get("/stats/shortlisted")
-async def shortlisted():
+# =========================================
+# TOTAL
+# =========================================
+@router.get("/upload/stats/total")
+def total(
+    db: Session = Depends(get_db)
+):
 
-    count = await cv_collection.count_documents({
-        "status": "shortlisted"
-    })
+    result = db.execute(text("""
+        SELECT COUNT(*) as count
+        FROM uploads
+    """)).mappings().first()
 
-    return {"count": count}
+    return result
+
+
+# =========================================
+# PENDING
+# =========================================
+@router.get("/upload/stats/pending")
+def pending(
+    db: Session = Depends(get_db)
+):
+
+    result = db.execute(text("""
+        SELECT COUNT(*) as count
+        FROM uploads
+        WHERE status='Uploaded'
+    """)).mappings().first()
+
+    return result
+
+
+# =========================================
+# SHORTLISTED
+# =========================================
+@router.get("/upload/stats/shortlisted")
+def shortlisted(
+    db: Session = Depends(get_db)
+):
+
+    result = db.execute(text("""
+        SELECT COUNT(*) as count
+        FROM uploads
+        WHERE status='Shortlisted'
+    """)).mappings().first()
+
+    return result

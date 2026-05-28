@@ -1,11 +1,34 @@
-from app.db import cv_collection
+from sqlalchemy import text
+
+from app.db_mysql import SessionLocal
 from app.ws.manager import manager
 
 
 async def broadcast_stats():
-    total = await cv_collection.count_documents({})
-    pending = await cv_collection.count_documents({"status": "queued"})
-    shortlisted = await cv_collection.count_documents({"status": "shortlisted"})
+
+    db = SessionLocal()
+
+    try:
+
+        total = db.execute(text("""
+            SELECT COUNT(*)
+            FROM uploads
+        """)).fetchone()[0]
+
+        pending = db.execute(text("""
+            SELECT COUNT(*)
+            FROM uploads
+            WHERE status='Uploaded'
+        """)).fetchone()[0]
+
+        shortlisted = db.execute(text("""
+            SELECT COUNT(*)
+            FROM uploads
+            WHERE status='Shortlisted'
+        """)).fetchone()[0]
+
+    finally:
+        db.close()
 
     await manager.broadcast({
         "total": total,

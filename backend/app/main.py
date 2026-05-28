@@ -1,42 +1,38 @@
-from fastapi import FastAPI, WebSocket
-from app.ws.manager import manager
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import os
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.routes.upload import router as upload_router
+from app.ws.manager import manager
 
 app = FastAPI()
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
+# ======================================
+# CORS
+# ======================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# normal routes
-from app.routes import upload, auth
+# ======================================
+# ROUTERS
+# ======================================
+app.include_router(upload_router)
 
-app.include_router(upload.router)
-app.include_router(auth.router)
-
-
-# 🔌 WEBSOCKET ROUTE (REAL TIME DASHBOARD)
+# ======================================
+# WEBSOCKET
+# ======================================
 @app.websocket("/ws/dashboard")
-async def dashboard_socket(websocket: WebSocket):
+async def dashboard_ws(websocket: WebSocket):
+
     await manager.connect(websocket)
 
     try:
         while True:
-            await websocket.receive_text()  # keep alive
-    except:
+            await websocket.receive_text()
+
+    except WebSocketDisconnect:
         manager.disconnect(websocket)
-
-
-@app.get("/")
-def home():
-    return {"message": "Backend running"}

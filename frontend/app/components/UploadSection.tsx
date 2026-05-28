@@ -1,45 +1,63 @@
 "use client";
 
-import { UploadCloud } from "lucide-react";
+import { UploadCloud, Loader2 } from "lucide-react";
 import { useState } from "react";
 
 type Props = {
   onUploadSuccess?: () => void;
 };
 
-export default function UploadSection({ onUploadSuccess }: Props) {
+export default function UploadSection({
+  onUploadSuccess,
+}: Props) {
+
   const [successMessage, setSuccessMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   const handleUpload = async (files: FileList) => {
+
+    setUploading(true);
+
     const formData = new FormData();
 
     Array.from(files).forEach((file) => {
       formData.append("files", file);
     });
 
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/upload/cvs`,
-      {
-        method: "POST",
-        body: formData,
+    try {
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/upload/cvs`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const data = await res.json();
+
+      if (res.ok) {
+
+        setSuccessMessage(
+          `Uploaded successfully: ${data.count} files`
+        );
+
+        onUploadSuccess?.();
+
+      } else {
+
+        setSuccessMessage(
+          data.error || "Upload failed"
+        );
       }
-    );
 
-    const data = await res.json();
+    } catch (error) {
 
-    if (res.ok) {
-      // ✅ success message instead of alert
-      setSuccessMessage(`Uploaded successfully: ${data.count} files`);
+      setSuccessMessage("Server error");
 
-      // auto hide after 3 sec
-      setTimeout(() => {
-        setSuccessMessage("");
-      }, 3000);
+    } finally {
 
-      // refresh dashboard
-      onUploadSuccess?.();
-    } else {
-      setSuccessMessage(data.error || "Upload failed");
+      setUploading(false);
 
       setTimeout(() => {
         setSuccessMessage("");
@@ -49,8 +67,8 @@ export default function UploadSection({ onUploadSuccess }: Props) {
 
   return (
     <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed border-cyan-300 text-center">
-      
-      {/* SUCCESS MESSAGE */}
+
+      {/* MESSAGE */}
       {successMessage && (
         <div className="mb-5 bg-green-100 text-green-700 px-4 py-3 rounded-xl">
           {successMessage}
@@ -59,7 +77,10 @@ export default function UploadSection({ onUploadSuccess }: Props) {
 
       <div className="flex justify-center mb-5">
         <div className="w-20 h-20 rounded-full bg-cyan-100 flex items-center justify-center">
-          <UploadCloud size={40} className="text-cyan-600" />
+          <UploadCloud
+            size={40}
+            className="text-cyan-600"
+          />
         </div>
       </div>
 
@@ -76,6 +97,7 @@ export default function UploadSection({ onUploadSuccess }: Props) {
         multiple
         className="hidden"
         id="cvUpload"
+        disabled={uploading}
         onChange={(e) => {
           if (e.target.files) {
             handleUpload(e.target.files);
@@ -85,10 +107,25 @@ export default function UploadSection({ onUploadSuccess }: Props) {
 
       <label
         htmlFor="cvUpload"
-        className="inline-block bg-cyan-600 hover:bg-cyan-700 text-white px-8 py-4 rounded-2xl cursor-pointer font-semibold transition"
+        className={`inline-flex items-center gap-2 px-8 py-4 rounded-2xl font-semibold transition text-white cursor-pointer
+        ${
+          uploading
+            ? "bg-gray-400 cursor-not-allowed"
+            : "bg-cyan-600 hover:bg-cyan-700"
+        }`}
       >
-        Upload CV Files
+
+        {uploading ? (
+          <>
+            <Loader2 className="animate-spin" size={20} />
+            Uploading...
+          </>
+        ) : (
+          "Upload CV Files"
+        )}
+
       </label>
+
     </div>
   );
 }

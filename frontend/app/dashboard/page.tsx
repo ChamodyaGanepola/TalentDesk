@@ -5,121 +5,178 @@ import StatCards from "@/app/components/StatCards";
 import { useEffect, useState } from "react";
 
 export default function DashboardPage() {
+
   const API = process.env.NEXT_PUBLIC_API_URL;
 
   const [uploads, setUploads] = useState<any[]>([]);
+
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
     shortlisted: 0,
   });
 
-  // 🔁 FULL REFRESH (API fallback)
+  // =========================================
+  // REFRESH DASHBOARD
+  // =========================================
   const refreshDashboard = async () => {
-    const [recent, total, pending, shortlisted] = await Promise.all([
-      fetch(`${API}/upload/recent`).then((r) => r.json()),
-      fetch(`${API}/upload/stats/total`).then((r) => r.json()),
-      fetch(`${API}/upload/stats/pending`).then((r) => r.json()),
-      fetch(`${API}/upload/stats/shortlisted`).then((r) => r.json()),
-    ]);
 
-    setUploads(recent);
+    try {
 
-    setStats({
-      total: total.count,
-      pending: pending.count,
-      shortlisted: shortlisted.count,
-    });
+      const [
+        recentRes,
+        totalRes,
+        pendingRes,
+        shortlistedRes
+      ] = await Promise.all([
+        fetch(`${API}/upload/recent`),
+        fetch(`${API}/upload/stats/total`),
+        fetch(`${API}/upload/stats/pending`),
+        fetch(`${API}/upload/stats/shortlisted`)
+      ]);
+
+      const recent = await recentRes.json();
+      const total = await totalRes.json();
+      const pending = await pendingRes.json();
+      const shortlisted = await shortlistedRes.json();
+
+      setUploads(Array.isArray(recent) ? recent : []);
+
+      setStats({
+        total: total.count || 0,
+        pending: pending.count || 0,
+        shortlisted: shortlisted.count || 0,
+      });
+
+    } catch (err) {
+
+      console.log("Dashboard fetch error:", err);
+
+      setUploads([]);
+
+      setStats({
+        total: 0,
+        pending: 0,
+        shortlisted: 0,
+      });
+    }
   };
 
-  // 🔥 INITIAL LOAD
+  // =========================================
+  // INITIAL LOAD
+  // =========================================
   useEffect(() => {
     refreshDashboard();
   }, []);
 
-  // ⚡ REAL-TIME WEBSOCKET
+  // =========================================
+  // WEBSOCKET
+  // =========================================
   useEffect(() => {
-    const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
 
-   ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
+    const ws = new WebSocket(
+      "ws://127.0.0.1:8000/ws/dashboard"
+    );
 
-  setStats((prev) => ({
-    total: data.total ?? prev.total,
-    pending: data.pending ?? prev.pending,
-    shortlisted: data.shortlisted ?? prev.shortlisted,
-  }));
-};
+    ws.onmessage = (event) => {
 
-    ws.onerror = (err) => {
-      console.log("WebSocket error:", err);
+      const data = JSON.parse(event.data);
+
+      setStats((prev) => ({
+        total: data.total ?? prev.total,
+        pending: data.pending ?? prev.pending,
+        shortlisted: data.shortlisted ?? prev.shortlisted,
+      }));
     };
 
-    return () => ws.close();
+    ws.onerror = (err) => {
+      console.log("Websocket error:", err);
+    };
+
+    return () => {
+      ws.close();
+    };
+
   }, []);
 
   return (
     <div className="space-y-8">
-      {/* Stats */}
+
+      {/* STATS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+
         <StatCards
           title="Total Uploaded CVs"
-          value={String(stats.total || 0)}
+          value={String(stats.total)}
         />
 
         <StatCards
           title="Pending Review"
-          value={String(stats.pending || 0)}
+          value={String(stats.pending)}
           color="text-yellow-500"
         />
 
         <StatCards
           title="Shortlisted"
-          value={String(stats.shortlisted || 0)}
+          value={String(stats.shortlisted)}
           color="text-green-600"
         />
+
       </div>
 
-      {/* Upload Section */}
-      <UploadSection onUploadSuccess={refreshDashboard} />
+      {/* UPLOAD */}
+      <UploadSection
+        onUploadSuccess={refreshDashboard}
+      />
 
-      {/* Recent Uploads */}
+      {/* RECENT */}
       <div className="bg-white rounded-3xl p-6 shadow-sm">
+
         <div className="flex items-center justify-between mb-5">
+
           <h2 className="text-xl font-semibold text-slate-800">
             Recent Uploads
           </h2>
 
-          <button className="text-cyan-600 hover:underline text-sm">
-            View All
-          </button>
         </div>
 
         <div className="space-y-4">
+
           {uploads.map((file, index) => (
+
             <div
               key={index}
               className="flex items-center justify-between border border-slate-200 rounded-2xl px-5 py-4"
             >
+
               <div>
+
                 <h3 className="font-medium text-slate-800">
                   {file.filename}
                 </h3>
 
                 <p className="text-sm text-slate-500">
+
                   {file.uploaded_at
                     ? new Date(file.uploaded_at).toLocaleString()
                     : "Just now"}
+
                 </p>
+
               </div>
 
               <span className="bg-cyan-100 text-cyan-700 px-4 py-1 rounded-full text-sm">
                 {file.status}
               </span>
+
             </div>
+
           ))}
+
         </div>
+
       </div>
+
     </div>
   );
 }
