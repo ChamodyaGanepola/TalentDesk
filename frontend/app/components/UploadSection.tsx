@@ -2,7 +2,7 @@
 
 import { UploadCloud, Loader2 } from "lucide-react";
 import { useState } from "react";
-
+import UploadFilterModal from "\@/app/components/UploadFilterModal";
 type Props = {
   onUploadSuccess?: () => void;
 };
@@ -13,7 +13,11 @@ export default function UploadSection({
 
   const [successMessage, setSuccessMessage] = useState("");
   const [uploading, setUploading] = useState(false);
+const [selectedFiles, setSelectedFiles] =
+  useState<FileList | null>(null);
 
+const [openModal, setOpenModal] =
+  useState(false);
   const handleUpload = async (files: FileList) => {
 
     setUploading(true);
@@ -93,17 +97,18 @@ export default function UploadSection({
       </p>
 
       <input
-        type="file"
-        multiple
-        className="hidden"
-        id="cvUpload"
-        disabled={uploading}
-        onChange={(e) => {
-          if (e.target.files) {
-            handleUpload(e.target.files);
-          }
-        }}
-      />
+  type="file"
+  multiple
+  className="hidden"
+  id="cvUpload"
+  disabled={uploading}
+  onChange={(e) => {
+    if (e.target.files) {
+      setSelectedFiles(e.target.files);
+      setOpenModal(true);
+    }
+  }}
+/>
 
       <label
         htmlFor="cvUpload"
@@ -125,7 +130,16 @@ export default function UploadSection({
         )}
 
       </label>
-
+{openModal && selectedFiles && (
+  <UploadFilterModal
+    files={selectedFiles}
+    onClose={() => setOpenModal(false)}
+    onSuccess={() => {
+      setOpenModal(false);
+      onUploadSuccess?.();
+    }}
+  />
+)}
     </div>
   );
 }
