@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/auth")
@@ -25,4 +25,7 @@ def login(data: LoginRequest):
             }
         }
 
-    raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {
+        "success": False,
+        "message": "Invalid credentials"
+    }

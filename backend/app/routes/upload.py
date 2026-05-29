@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db_mysql import get_db
 from app.ws.broadcaster import broadcast_stats
-
+from datetime import timezone, datetime
 import os
 import uuid
-from datetime import datetime
+
 
 router = APIRouter()
 
@@ -101,7 +101,7 @@ def recent_uploads(
             "id": row["id"],
             "filename": row["file_name"],
             "status": row["status"],
-            "created_at": row["created_at"]
+            "created_at": row["created_at"].replace(tzinfo=timezone.utc).isoformat()
         }
         for row in result
     ]

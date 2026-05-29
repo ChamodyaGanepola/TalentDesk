@@ -3,11 +3,18 @@
 import UploadSection from "@/app/components/UploadSection";
 import StatCards from "@/app/components/StatCards";
 import { useEffect, useState } from "react";
-
+function StatCardSkeleton() {
+  return (
+    <div className="bg-white rounded-2xl p-6 shadow-sm animate-pulse">
+      <div className="h-3 w-24 bg-slate-200 rounded"></div>
+      <div className="h-10 w-16 bg-slate-200 rounded mt-4"></div>
+    </div>
+  );
+}
 export default function DashboardPage() {
 
   const API = process.env.NEXT_PUBLIC_API_URL;
-
+  const [loading, setLoading] = useState(true);
   const [uploads, setUploads] = useState<any[]>([]);
   console.log("Uploads state:", uploads);
   const [stats, setStats] = useState({
@@ -16,13 +23,12 @@ export default function DashboardPage() {
     shortlisted: 0,
   });
 
-  // =========================================
-  // REFRESH DASHBOARD
-  // =========================================
+
+
   const refreshDashboard = async () => {
+    setLoading(true);
 
     try {
-
       const [
         recentRes,
         totalRes,
@@ -49,16 +55,16 @@ export default function DashboardPage() {
       });
 
     } catch (err) {
-
       console.log("Dashboard fetch error:", err);
 
       setUploads([]);
-
       setStats({
         total: 0,
         pending: 0,
         shortlisted: 0,
       });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -104,24 +110,27 @@ export default function DashboardPage() {
 
       {/* STATS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-
-        <StatCards
-          title="Total Uploaded CVs"
-          value={String(stats.total)}
-        />
-
-        <StatCards
-          title="Pending Review"
-          value={String(stats.pending)}
-          color="text-yellow-500"
-        />
-
-        <StatCards
-          title="Shortlisted"
-          value={String(stats.shortlisted)}
-          color="text-green-600"
-        />
-
+        {loading ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            <StatCards title="Total Uploaded CVs" value={String(stats.total)} />
+            <StatCards
+              title="Pending Review"
+              value={String(stats.pending)}
+              color="text-yellow-500"
+            />
+            <StatCards
+              title="Shortlisted"
+              value={String(stats.shortlisted)}
+              color="text-green-600"
+            />
+          </>
+        )}
       </div>
 
       {/* UPLOAD */}
@@ -157,7 +166,7 @@ export default function DashboardPage() {
 
                 <p className="text-sm text-slate-500">
                   {file.created_at
-                    ? new Date(file.created_at).toLocaleString()
+                    ? new Date(file.created_at).toLocaleString("en-LK")
                     : "Just now"}
                 </p>
 

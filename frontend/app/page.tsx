@@ -22,8 +22,9 @@ export default function LoginPage() {
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  e.preventDefault();
 
+  try {
     const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/login`, {
       method: "POST",
       headers: {
@@ -34,22 +35,29 @@ export default function LoginPage() {
 
     const data = await res.json();
 
-    if (data.success) {
-      if (rememberMe) {
-        localStorage.setItem("remember_email", email);
-        localStorage.setItem("remember_password", password);
-      } else {
-        localStorage.removeItem("remember_email");
-        localStorage.removeItem("remember_password");
-      }
-
-      localStorage.setItem("user", JSON.stringify(data.user));
-
-      router.push("/dashboard");
-    } else {
-      alert(data.message);
+    // ❌ backend failed login
+    if (!res.ok || !data.success) {
+      alert(data.message || "Login failed");
+      return;
     }
-  };
+
+    // ✅ remember me
+    if (rememberMe) {
+      localStorage.setItem("remember_email", email);
+      localStorage.setItem("remember_password", password);
+    } else {
+      localStorage.removeItem("remember_email");
+      localStorage.removeItem("remember_password");
+    }
+
+    localStorage.setItem("user", JSON.stringify(data.user));
+
+    router.push("/dashboard");
+
+  } catch (err) {
+    alert("Server error. Please try again.");
+  }
+};
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-100 px-4">
@@ -82,7 +90,7 @@ export default function LoginPage() {
               placeholder="admin@gmail.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              className="w-full border border-slate-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-500 bg-white"
               required
             />
           </div>
