@@ -23,7 +23,7 @@ Return JSON ONLY:
 {
   "name": "",
   "skills": [],
-  "experience_years": 0,
+  "experience_years": 0.0,
   "qualifications": [],
   "profession": "",
   "internships": []
@@ -33,6 +33,13 @@ Rules:
 - NEVER return empty skills if CV has technical content
 - infer skills from job descriptions
 - internships count as experience
+experience_years:
+- Must be decimal
+- 6 months = 0.5
+- 3 months = 0.25
+- 1 year = 1.0
+- 1 year 6 months = 1.5
+- Never round to nearest integer
 """
             },
             {

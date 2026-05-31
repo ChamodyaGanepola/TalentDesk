@@ -1,137 +1,83 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 
 type Props = {
   files: FileList;
+  skills: string[];
+  qualifications: string[];
   onClose: () => void;
   onSuccess: () => void;
 };
 
 export default function UploadFilterModal({
   files,
+  skills: initialSkills,
+  qualifications: initialQualifications,
   onClose,
   onSuccess,
 }: Props) {
 
-  const API = process.env.NEXT_PUBLIC_API_URL;
-
-  // =========================
-  // MASTER DATA
-  // =========================
-  const [skills, setSkills] = useState<string[]>([
-    "React",
-    "Node.js",
-    "Python",
-    "FastAPI",
-  ]);
-
-  const [qualifications, setQualifications] = useState<string[]>([
-    "BSc Computer Science",
-    "MSc IT",
-    "AWS Certification",
-  ]);
-
-  // =========================
-  // SELECTED DATA
-  // =========================
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedQualifications, setSelectedQualifications] = useState<string[]>([]);
 
-  // =========================
-  // EXPERIENCE FILTER
-  // =========================
   const [experienceType, setExperienceType] = useState("minimum");
-  const [experienceValue, setExperienceValue] = useState(4);
 
-  // =========================
-  // NEW INPUTS
-  // =========================
-  const [newSkill, setNewSkill] = useState("");
-  const [newQualification, setNewQualification] = useState("");
+  // ✅ STRING keeps decimals safe (0.7, 1.5 etc)
+  const [experienceValue, setExperienceValue] = useState("0.7");
 
   const [loading, setLoading] = useState(false);
 
-  // =========================
-  // TOGGLE SKILL
-  // =========================
+  // memo prevents rerender lag
+  const skills = useMemo(() => initialSkills || [], [initialSkills]);
+  const qualifications = useMemo(() => initialQualifications || [], [initialQualifications]);
+
+  useEffect(() => {
+    if (!files) return;
+
+    setSelectedSkills([]);
+    setSelectedQualifications([]);
+    setExperienceType("minimum");
+    setExperienceValue("0.7");
+  }, [files]);
+
   const toggleSkill = (skill: string) => {
-    setSelectedSkills((prev) =>
+    setSelectedSkills(prev =>
       prev.includes(skill)
-        ? prev.filter((s) => s !== skill)
+        ? prev.filter(s => s !== skill)
         : [...prev, skill]
     );
   };
 
-  // =========================
-  // TOGGLE QUALIFICATION
-  // =========================
   const toggleQualification = (q: string) => {
-    setSelectedQualifications((prev) =>
+    setSelectedQualifications(prev =>
       prev.includes(q)
-        ? prev.filter((x) => x !== q)
+        ? prev.filter(x => x !== q)
         : [...prev, q]
     );
   };
 
-  // =========================
-  // ADD SKILL
-  // =========================
-  const addSkill = () => {
-    if (!newSkill.trim()) return;
-    setSkills((prev) => [...prev, newSkill]);
-    setNewSkill("");
-  };
-
-  // =========================
-  // ADD QUALIFICATION
-  // =========================
-  const addQualification = () => {
-    if (!newQualification.trim()) return;
-    setQualifications((prev) => [...prev, newQualification]);
-    setNewQualification("");
-  };
-
-  // =========================
-  // UPLOAD FINAL
-  // =========================
   const handleUpload = async () => {
-
     setLoading(true);
 
     const formData = new FormData();
 
-    // files
-    Array.from(files).forEach((file) => {
+    Array.from(files).forEach(file => {
       formData.append("files", file);
     });
 
-    // filters (IMPORTANT: backend expects JSON string)
-    formData.append(
-      "skills",
-      JSON.stringify(selectedSkills)
-    );
-
-    formData.append(
-      "qualifications",
-      JSON.stringify(selectedQualifications)
-    );
-
+    formData.append("skills", JSON.stringify(selectedSkills));
+    formData.append("qualifications", JSON.stringify(selectedQualifications));
     formData.append("experience_type", experienceType);
-    formData.append(
-      "experience_value",
-      String(experienceValue)
-    );
+
+    // ✅ FIX: preserves 0.7, 1.5
+    formData.append("experience_value", experienceValue);
 
     try {
-
-      const res = await fetch(
-        `${API}/upload/cvs`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/cvs`, {
+        method: "POST",
+        body: formData,
+      });
 
       const data = await res.json();
 
@@ -142,8 +88,6 @@ export default function UploadFilterModal({
         alert(data.message || "Upload failed");
       }
 
-    } catch (err) {
-      alert("Server error during upload");
     } finally {
       setLoading(false);
     }
@@ -154,56 +98,11 @@ export default function UploadFilterModal({
 
       <div className="bg-white w-full max-w-3xl rounded-3xl p-6 max-h-[90vh] overflow-y-auto">
 
-        {/* TITLE */}
-        <h2 className="text-2xl font-bold mb-6">
-          CV Filter Setup
-        </h2>
+        <h2 className="text-2xl font-bold mb-6">CV Filter Setup</h2>
 
-        {/* =========================
-            SKILLS
-        ========================= */}
+        {/* EXPERIENCE */}
         <div className="mb-6">
-
-          <h3 className="font-semibold mb-3">Skills</h3>
-
-          <div className="grid grid-cols-2 gap-2">
-            {skills.map((skill) => (
-              <label key={skill} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={selectedSkills.includes(skill)}
-                  onChange={() => toggleSkill(skill)}
-                />
-                {skill}
-              </label>
-            ))}
-          </div>
-
-          <div className="flex gap-2 mt-3">
-            <input
-              value={newSkill}
-              onChange={(e) => setNewSkill(e.target.value)}
-              placeholder="Add skill"
-              className="border px-3 py-2 rounded-xl w-full"
-            />
-            <button
-              onClick={addSkill}
-              className="bg-cyan-600 text-white px-4 rounded-xl"
-            >
-              Add
-            </button>
-          </div>
-
-        </div>
-
-        {/* =========================
-            EXPERIENCE
-        ========================= */}
-        <div className="mb-6">
-
-          <h3 className="font-semibold mb-3">
-            Experience Requirement
-          </h3>
+          <h3 className="font-semibold mb-3">Experience</h3>
 
           <select
             value={experienceType}
@@ -217,28 +116,38 @@ export default function UploadFilterModal({
 
           <input
             type="number"
-            min={0}
+            step="0.1"
+            min="0"
             value={experienceValue}
-            onChange={(e) =>
-              setExperienceValue(Number(e.target.value))
-            }
+            onChange={(e) => setExperienceValue(e.target.value)}
             className="border px-3 py-2 rounded-xl w-full"
-            placeholder="Years"
           />
-
         </div>
 
-        {/* =========================
-            QUALIFICATIONS
-        ========================= */}
+        {/* SKILLS */}
         <div className="mb-6">
-
-          <h3 className="font-semibold mb-3">
-            Professional Qualifications
-          </h3>
+          <h3 className="font-semibold mb-3">Skills</h3>
 
           <div className="grid grid-cols-2 gap-2">
-            {qualifications.map((q) => (
+            {skills.map(skill => (
+              <label key={skill} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={selectedSkills.includes(skill)}
+                  onChange={() => toggleSkill(skill)}
+                />
+                {skill}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* QUALIFICATIONS */}
+        <div className="mb-6">
+          <h3 className="font-semibold mb-3">Qualifications</h3>
+
+          <div className="grid grid-cols-2 gap-2">
+            {qualifications.map(q => (
               <label key={q} className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -249,35 +158,11 @@ export default function UploadFilterModal({
               </label>
             ))}
           </div>
-
-          <div className="flex gap-2 mt-3">
-            <input
-              value={newQualification}
-              onChange={(e) =>
-                setNewQualification(e.target.value)
-              }
-              placeholder="Add qualification"
-              className="border px-3 py-2 rounded-xl w-full"
-            />
-            <button
-              onClick={addQualification}
-              className="bg-cyan-600 text-white px-4 rounded-xl"
-            >
-              Add
-            </button>
-          </div>
-
         </div>
 
-        {/* =========================
-            ACTION BUTTONS
-        ========================= */}
+        {/* ACTIONS */}
         <div className="flex justify-end gap-3">
-
-          <button
-            onClick={onClose}
-            className="px-4 py-2 border rounded-xl"
-          >
+          <button onClick={onClose} className="px-4 py-2 border rounded-xl">
             Cancel
           </button>
 
@@ -288,11 +173,9 @@ export default function UploadFilterModal({
           >
             {loading ? "Uploading..." : "Filter & Upload"}
           </button>
-
         </div>
 
       </div>
-
     </div>
   );
 }

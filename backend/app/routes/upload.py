@@ -8,13 +8,56 @@ import os
 import uuid
 from fastapi import  APIRouter, Depends, UploadFile, File, Form 
 import json
-
+from pydantic import BaseModel
 router = APIRouter()
 
 UPLOAD_DIR = "uploads"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
+
+class SkillCreate(BaseModel):
+    name: str
+
+
+@router.post("/skills/add")
+def add_skill(
+    payload: SkillCreate,
+    db: Session = Depends(get_db)
+):
+
+    db.execute(text("""
+        INSERT IGNORE INTO skills(name)
+        VALUES(:name)
+    """), {
+        "name": payload.name
+    })
+
+    db.commit()
+
+    return {"success": True}
+
+class QualificationCreate(BaseModel):
+    name: str
+
+
+@router.post("/qualifications/add")
+def add_qualification(
+    payload: QualificationCreate,
+    db: Session = Depends(get_db)
+):
+
+    db.execute(text("""
+        INSERT IGNORE INTO qualifications(name)
+        VALUES(:name)
+    """), {
+        "name": payload.name
+    })
+
+    db.commit()
+
+    return {"success": True}    
 # =========================================
 # BULK UPLOAD CVS
 # =========================================
@@ -32,7 +75,7 @@ async def upload_cvs(
 
     experience_type: str = Form(...),
 
-    experience_value: int = Form(...),
+    experience_value: float = Form(...),
 
     db: Session = Depends(get_db)
 ):
@@ -314,3 +357,34 @@ def shortlisted(
     """)).mappings().first()
 
     return result
+
+# =========================================
+# GET SKILLS
+# =========================================
+@router.get("/skills")
+def get_skills(db: Session = Depends(get_db)):
+
+    rows = db.execute(text("""
+        SELECT name
+        FROM skills
+        ORDER BY name
+    """)).mappings().all()
+
+    return [r["name"] for r in rows]
+
+
+# =========================================
+# GET QUALIFICATIONS
+# =========================================
+@router.get("/qualifications")
+def get_qualifications(
+    db: Session = Depends(get_db)
+):
+
+    rows = db.execute(text("""
+        SELECT name
+        FROM qualifications
+        ORDER BY name
+    """)).mappings().all()
+
+    return [r["name"] for r in rows]

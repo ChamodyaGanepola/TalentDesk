@@ -29,7 +29,7 @@ def vision_ocr(file_path: str):
     full_result = {
         "name": "",
         "skills": [],
-        "experience_years": 0,
+        "experience_years": 0.0,
         "qualifications": [],
         "profession": "",
         "raw_text": ""
