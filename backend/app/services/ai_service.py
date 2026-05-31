@@ -20,8 +20,12 @@ Extract ALL information from CV.
 
 Return JSON ONLY:
 
+Extract:
+
 {
   "name": "",
+  "email": "",
+  "contact_no": "",
   "skills": [],
   "experience_years": 0.0,
   "qualifications": [],
@@ -29,9 +33,14 @@ Return JSON ONLY:
   "internships": []
 }
 
+
+
 Rules:
 - NEVER return empty skills if CV has technical content
 - infer skills from job descriptions
+- Extract email address
+- Extract phone number
+- Qualifications should contain degrees, diplomas, certifications
 - internships count as experience
 experience_years:
 - Must be decimal

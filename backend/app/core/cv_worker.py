@@ -10,6 +10,24 @@ from app.services.ai_service import extract_cv_text
 from app.services.evaluation import evaluate_candidate
 import fitz  # PyMuPDF
 
+from app.services.export_service import export_batch_shortlisted
+
+
+# =========================
+# BATCH COMPLETION CHECK
+# =========================
+def batch_completed(db, batch_id):
+
+    remaining = db.execute(text("""
+        SELECT COUNT(*)
+        FROM uploads
+        WHERE batch_id=:batch_id
+        AND status IN ('Uploaded', 'Processing')
+    """), {"batch_id": batch_id}).scalar()
+
+    return remaining == 0
+
+
 # =========================
 # READ FILE
 # =========================
@@ -29,15 +47,9 @@ def read_file(path: str) -> str:
 
 
 # =========================
-# LOAD REQUIREMENTS FROM DB
+# LOAD REQUIREMENTS
 # =========================
 def load_batch_requirements(db, batch_id: str):
-    """
-    Loads:
-    - skills
-    - qualifications
-    - experience rules
-    """
 
     skills = db.execute(text("""
         SELECT s.name
@@ -68,7 +80,7 @@ def load_batch_requirements(db, batch_id: str):
 
 
 # =========================
-# EXPERIENCE LOGIC FIX
+# EXPERIENCE CHECK
 # =========================
 def check_experience(cv_exp, req_type, req_value):
 
@@ -82,7 +94,7 @@ def check_experience(cv_exp, req_type, req_value):
         return cv_exp > req_value
 
     if req_type == "exact":
-        return abs(cv_exp - req_value) < 0.01  #  float safe
+        return abs(cv_exp - req_value) < 0.01
 
     return True
 
@@ -116,7 +128,9 @@ async def cv_worker_loop():
 
             print(f"\n📥 Processing: {file_name}")
 
-            # mark processing
+            # =========================
+            # MARK PROCESSING
+            # =========================
             db.execute(text("""
                 UPDATE uploads SET status='Processing'
                 WHERE id=:id
@@ -124,7 +138,7 @@ async def cv_worker_loop():
             db.commit()
 
             # =========================
-            # LOAD REQUIREMENTS FROM DB
+            # LOAD REQUIREMENTS
             # =========================
             req = load_batch_requirements(db, batch_id)
 
@@ -146,7 +160,7 @@ async def cv_worker_loop():
                 method = "text_ai"
 
             # =========================
-            # EXPERIENCE FROM CV
+            # EXPERIENCE
             # =========================
             cv_exp = float(extracted.get("experience_years") or 0)
 
@@ -169,16 +183,30 @@ async def cv_worker_loop():
             print("🏷 Final Status:", status)
 
             # =========================
-            # SAVE TO MONGO
+            # SAVE TO MONGO (ENRICHED)
             # =========================
             cv_collection.insert_one({
                 "batch_id": batch_id,
+
+                "name": extracted.get("name"),
+                "email": extracted.get("email"),
+                "contact_no": extracted.get("contact_no"),
+
+                "experience_years": extracted.get("experience_years"),
+                "profession": extracted.get("profession"),
+
+                "skills": extracted.get("skills", []),
+                "qualifications": extracted.get("qualifications", []),
+
                 "file_name": file_name,
                 "file_url": file_url,
+
+                "status": status,
+                "method": method,
+
                 "raw_text": raw_text,
                 "extracted": extracted,
-                "method": method,
-                "status": status,
+
                 "processed_at": time.time()
             })
 
@@ -195,6 +223,42 @@ async def cv_worker_loop():
             })
 
             db.commit()
+
+            # =========================
+            # EXPORT ONLY ONCE PER BATCH
+            # =========================
+            if batch_completed(db, batch_id):
+
+                existing = db.execute(text("""
+                    SELECT id FROM batch_exports
+                    WHERE batch_id=:batch_id
+                """), {"batch_id": batch_id}).fetchone()
+
+                if not existing:
+
+                    excel_path = export_batch_shortlisted(batch_id)
+
+                    if excel_path:
+
+                        db.execute(text("""
+                            INSERT INTO batch_exports
+                            (
+                                batch_id,
+                                excel_file
+                            )
+                            VALUES
+                            (
+                                :batch_id,
+                                :excel_file
+                            )
+                        """), {
+                            "batch_id": batch_id,
+                            "excel_file": excel_path
+                        })
+
+                        db.commit()
+
+                        print(f"📊 Excel Generated: {excel_path}")
 
             print(f"✅ DONE: {file_name}")
 

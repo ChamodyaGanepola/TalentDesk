@@ -28,11 +28,14 @@ def vision_ocr(file_path: str):
 
     full_result = {
         "name": "",
+        "email": "",
+        "contact_no": "",
         "skills": [],
         "experience_years": 0.0,
         "qualifications": [],
         "profession": "",
-        "raw_text": ""
+        "internships": [],
+        "raw_text": ""   # ✅ FIXED COMMA ISSUE
     }
 
     for img in images:
@@ -49,16 +52,21 @@ Extract CV into STRICT JSON ONLY:
 
 {
   "name": "",
+  "email": "",
+  "contact_no": "",
   "skills": [],
-  "experience_years": 0,
+  "experience_years": 0.0,
   "qualifications": [],
   "profession": "",
   "internships": []
 }
 
-IMPORTANT:
+Rules:
+- Extract email address
+- Extract phone number
+- Qualifications should contain degrees, diplomas, certifications
 - internships MUST be counted in experience_years
-- return ONLY valid JSON
+- Return ONLY valid JSON
 """
                 },
                 {
@@ -79,9 +87,12 @@ IMPORTANT:
         try:
             data = json.loads(response.choices[0].message.content)
 
-            # merge pages
+            # =========================
+            # MERGE PAGES SAFELY
+            # =========================
             full_result["skills"] += data.get("skills", [])
             full_result["qualifications"] += data.get("qualifications", [])
+
             full_result["experience_years"] = max(
                 full_result["experience_years"],
                 data.get("experience_years", 0)
@@ -90,13 +101,21 @@ IMPORTANT:
             if not full_result["name"]:
                 full_result["name"] = data.get("name", "")
 
+            if not full_result["email"]:
+                full_result["email"] = data.get("email", "")
+
+            if not full_result["contact_no"]:
+                full_result["contact_no"] = data.get("contact_no", "")
+
             if not full_result["profession"]:
                 full_result["profession"] = data.get("profession", "")
 
         except Exception:
             continue
 
-    # cleanup duplicates
+    # =========================
+    # CLEAN DUPLICATES
+    # =========================
     full_result["skills"] = list(set(full_result["skills"]))
     full_result["qualifications"] = list(set(full_result["qualifications"]))
 

@@ -1,10 +1,10 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-client = AsyncIOMotorClient(os.getenv("MONGO_URL"))
+client = MongoClient(os.getenv("MONGO_URL"))
 db = client[os.getenv("DB_NAME")]
 
 cv_collection = db["cvs"]

@@ -388,3 +388,37 @@ def get_qualifications(
     """)).mappings().all()
 
     return [r["name"] for r in rows]
+
+@router.get("/resume/shortlisted/{batch_id}")
+def get_shortlisted(batch_id: str, db: Session = Depends(get_db)):
+
+    result = db.execute(text("""
+        SELECT *
+        FROM uploads
+        WHERE batch_id = :batch_id
+        AND status = 'Shortlisted'
+        ORDER BY created_at DESC
+    """), {"batch_id": batch_id}).mappings().all()
+
+    return [
+        {
+            "id": r["id"],
+            "name": r["file_name"],
+            "status": r["status"],
+            "created_at": r["created_at"].isoformat()
+        }
+        for r in result
+    ]
+
+@router.get("/resume/export/{batch_id}")
+def get_export(batch_id: str, db: Session = Depends(get_db)):
+
+    result = db.execute(text("""
+        SELECT excel_file
+        FROM batch_exports
+        WHERE batch_id = :batch_id
+        ORDER BY id DESC
+        LIMIT 1
+    """), {"batch_id": batch_id}).mappings().first()
+
+    return result or {"excel_file": None}
