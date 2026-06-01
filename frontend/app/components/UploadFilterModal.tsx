@@ -1,36 +1,54 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 
 type Props = {
   files: FileList;
-  skills: string[];
-  qualifications: string[];
   onClose: () => void;
   onSuccess: () => void;
 };
 
 export default function UploadFilterModal({
   files,
-  skills: initialSkills,
-  qualifications: initialQualifications,
   onClose,
   onSuccess,
 }: Props) {
+
+  const API = process.env.NEXT_PUBLIC_API_URL;
+
+  const [skills, setSkills] = useState<string[]>([]);
+  const [qualifications, setQualifications] = useState<string[]>([]);
 
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedQualifications, setSelectedQualifications] = useState<string[]>([]);
 
   const [experienceType, setExperienceType] = useState("minimum");
-
-  // ✅ STRING keeps decimals safe (0.7, 1.5 etc)
   const [experienceValue, setExperienceValue] = useState("0.7");
-
   const [loading, setLoading] = useState(false);
 
-  // memo prevents rerender lag
-  const skills = useMemo(() => initialSkills || [], [initialSkills]);
-  const qualifications = useMemo(() => initialQualifications || [], [initialQualifications]);
+  const [newSkill, setNewSkill] = useState("");
+  const [newQualification, setNewQualification] = useState("");
+
+  // =========================
+  // LOAD FROM DB (SLOW OK)
+  // =========================
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [s, q] = await Promise.all([
+          fetch(`${API}/skills`),
+          fetch(`${API}/qualifications`)
+        ]);
+
+        setSkills(await s.json());
+        setQualifications(await q.json());
+      } catch (err) {
+        console.log(err);
+      }
+    };
+
+    load();
+  }, []);
 
   useEffect(() => {
     if (!files) return;
@@ -57,6 +75,54 @@ export default function UploadFilterModal({
     );
   };
 
+  // =========================
+  // REFRESH FUNCTIONS
+  // =========================
+  const refreshSkills = async () => {
+    const res = await fetch(`${API}/skills`);
+    setSkills(await res.json());
+  };
+
+  const refreshQualifications = async () => {
+    const res = await fetch(`${API}/qualifications`);
+    setQualifications(await res.json());
+  };
+
+  // =========================
+  // ADD SKILL
+  // =========================
+  const addSkill = async () => {
+    if (!newSkill.trim()) return;
+
+    await fetch(`${API}/skills/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newSkill })
+    });
+
+    setNewSkill("");
+    await refreshSkills(); // 🔥 LIVE UPDATE
+  };
+
+  // =========================
+  // ADD QUALIFICATION
+  // =========================
+  const addQualification = async () => {
+    if (!newQualification.trim()) return;
+
+    await fetch(`${API}/qualifications/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newQualification })
+    });
+
+    setNewQualification("");
+    await refreshQualifications(); // 🔥 LIVE UPDATE
+  };
+
+  // =========================
+  // UPLOAD
+  // =========================
   const handleUpload = async () => {
     setLoading(true);
 
@@ -69,12 +135,10 @@ export default function UploadFilterModal({
     formData.append("skills", JSON.stringify(selectedSkills));
     formData.append("qualifications", JSON.stringify(selectedQualifications));
     formData.append("experience_type", experienceType);
-
-    // ✅ FIX: preserves 0.7, 1.5
     formData.append("experience_value", experienceValue);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/cvs`, {
+      const res = await fetch(`${API}/upload/cvs`, {
         method: "POST",
         body: formData,
       });
@@ -117,7 +181,6 @@ export default function UploadFilterModal({
           <input
             type="number"
             step="0.1"
-            min="0"
             value={experienceValue}
             onChange={(e) => setExperienceValue(e.target.value)}
             className="border px-3 py-2 rounded-xl w-full"
@@ -127,6 +190,21 @@ export default function UploadFilterModal({
         {/* SKILLS */}
         <div className="mb-6">
           <h3 className="font-semibold mb-3">Skills</h3>
+
+          <div className="flex gap-2 mb-3">
+            <input
+              value={newSkill}
+              onChange={(e) => setNewSkill(e.target.value)}
+              placeholder="Add new skill"
+              className="border px-3 py-2 rounded-xl w-full"
+            />
+            <button
+              onClick={addSkill}
+              className="bg-cyan-600 text-white px-4 rounded-xl"
+            >
+              Add
+            </button>
+          </div>
 
           <div className="grid grid-cols-2 gap-2">
             {skills.map(skill => (
@@ -145,6 +223,21 @@ export default function UploadFilterModal({
         {/* QUALIFICATIONS */}
         <div className="mb-6">
           <h3 className="font-semibold mb-3">Qualifications</h3>
+
+          <div className="flex gap-2 mb-3">
+            <input
+              value={newQualification}
+              onChange={(e) => setNewQualification(e.target.value)}
+              placeholder="Add new qualification"
+              className="border px-3 py-2 rounded-xl w-full"
+            />
+            <button
+              onClick={addQualification}
+              className="bg-cyan-600 text-white px-4 rounded-xl"
+            >
+              Add
+            </button>
+          </div>
 
           <div className="grid grid-cols-2 gap-2">
             {qualifications.map(q => (

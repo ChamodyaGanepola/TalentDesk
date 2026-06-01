@@ -6,45 +6,40 @@ import Topbar from "@/app/components/Topbar";
 
 import { FileText, Eye, Download, Search, Filter } from "lucide-react";
 
-type Resume = {
+type ExcelFile = {
   id: number;
-  name: string;
-  role?: string;
-  experience?: string;
-  status?: string;
-  uploadedAt?: string;
+  batch_id: string;
+  file: string;
+  created_at?: string;
 };
 
 export default function ResumeViewerPage() {
   const [search, setSearch] = useState("");
-  const [resumes, setResumes] = useState<Resume[]>([]);
+  const [files, setFiles] = useState<ExcelFile[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchResumes = async () => {
-      try {
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/upload/recent`
-        );
+  const fetchFiles = async () => {
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/batch/excels`
+      );
 
-        const data = await res.json();
+      const data = await res.json();
 
-        // IMPORTANT FIX: ensure array
-        setResumes(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.log("Resume fetch error:", err);
-        setResumes([]);
-      } finally {
-        setLoading(false);
-      }
-    };
+      setFiles(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.log(err);
+      setFiles([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    fetchResumes();
-  }, []);
+  fetchFiles();
+}, []);
 
-  const filteredResumes = resumes.filter((r) =>
-    (r.name || "").toLowerCase().includes(search.toLowerCase())
-  );
+
 
   return (
     <div className="flex min-h-screen bg-slate-100">
@@ -77,41 +72,34 @@ export default function ResumeViewerPage() {
           {loading ? (
             <p className="text-slate-500">Loading resumes...</p>
           ) : (
-            filteredResumes.map((resume) => (
-              <div
-                key={resume.id}
-                className="bg-white rounded-3xl shadow-sm p-6 flex items-center justify-between"
-              >
-                <div className="flex items-center gap-5">
-                  <div className="w-16 h-16 rounded-2xl bg-cyan-100 flex items-center justify-center">
-                    <FileText className="text-cyan-600" size={28} />
-                  </div>
+         files.map((file) => (
+  <div
+    key={file.id}
+    className="bg-white rounded-3xl shadow-sm p-6 flex items-center justify-between"
+  >
+    <div>
+      <h2 className="font-semibold text-lg">
+         Batch: {file.batch_id}
+      </h2>
 
-                  <div>
-                    <h2 className="font-semibold text-slate-800 text-lg">
-                      {resume.name}
-                    </h2>
+      <p className="text-sm text-gray-500">
+        Excel Generated: {file.file}
+      </p>
 
-                    <div className="flex gap-4 mt-2 text-sm text-slate-500">
-                      <span>{resume.role || "Unknown Role"}</span>
-                      <span>Experience: {resume.experience || "-"}</span>
-                    </div>
-                  </div>
-                </div>
+      <p className="text-xs text-gray-400">
+        {file.created_at}
+      </p>
+    </div>
 
-                <div className="flex items-center gap-3">
-                  <button className="flex items-center gap-2 bg-slate-100 px-5 py-3 rounded-xl">
-                    <Eye size={18} />
-                    View
-                  </button>
-
-                  <button className="flex items-center gap-2 bg-cyan-600 text-white px-5 py-3 rounded-xl">
-                    <Download size={18} />
-                    Download
-                  </button>
-                </div>
-              </div>
-            ))
+   <a
+  href={`${process.env.NEXT_PUBLIC_API_URL}/${file.file}`}
+  target="_blank"
+  rel="noreferrer"
+>
+      Download Excel
+    </a>
+  </div>
+))
           )}
         </div>
       </main>

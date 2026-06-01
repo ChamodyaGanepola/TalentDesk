@@ -1,7 +1,7 @@
 "use client";
 
 import { UploadCloud, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import UploadFilterModal from "@/app/components/UploadFilterModal";
 
 type Props = {
@@ -13,28 +13,6 @@ export default function UploadSection({ onUploadSuccess }: Props) {
   const [uploading, setUploading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [openModal, setOpenModal] = useState(false);
-
-  // ✅ PRELOADED DATA (IMPORTANT FIX)
-  const [skills, setSkills] = useState<string[]>([]);
-  const [qualifications, setQualifications] = useState<string[]>([]);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [s, q] = await Promise.all([
-          fetch(`${process.env.NEXT_PUBLIC_API_URL}/skills`),
-          fetch(`${process.env.NEXT_PUBLIC_API_URL}/qualifications`)
-        ]);
-
-        setSkills(await s.json());
-        setQualifications(await q.json());
-      } catch (e) {
-        console.log(e);
-      }
-    };
-
-    load();
-  }, []);
 
   const handleUpload = async (files: FileList) => {
     setUploading(true);
@@ -61,7 +39,7 @@ export default function UploadSection({ onUploadSuccess }: Props) {
       } else {
         setSuccessMessage(data.error || "Upload failed");
       }
-    } catch (error) {
+    } catch {
       setSuccessMessage("Server error");
     } finally {
       setUploading(false);
@@ -114,12 +92,9 @@ export default function UploadSection({ onUploadSuccess }: Props) {
         )}
       </label>
 
-      {/* ✅ MODAL NOW GETS PRELOADED DATA */}
       {openModal && selectedFiles && (
         <UploadFilterModal
           files={selectedFiles}
-          skills={skills}
-          qualifications={qualifications}
           onClose={() => setOpenModal(false)}
           onSuccess={() => {
             setOpenModal(false);

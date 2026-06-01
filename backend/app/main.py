@@ -6,6 +6,9 @@ from app.routes.auth import router as auth_router
 from app.routes.upload import router as upload_router
 from app.ws.manager import manager
 from app.core.cv_worker import cv_worker_loop
+from fastapi.staticfiles import StaticFiles
+import os
+
 
 app = FastAPI()
 
@@ -20,6 +23,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount(
+    "/exports",
+    StaticFiles(directory="exports"),
+    name="exports"
+)
 # ======================
 # ROUTES
 # ======================

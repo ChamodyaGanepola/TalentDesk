@@ -7,7 +7,7 @@ from app.db_mongo import cv_collection
 
 from app.services.vision_ocr import vision_ocr
 from app.services.ai_service import extract_cv_text
-from app.services.evaluation import evaluate_candidate
+from app.services.matching_service import evaluate_candidate
 import fitz  # PyMuPDF
 
 from app.services.export_service import export_batch_shortlisted
@@ -160,21 +160,24 @@ async def cv_worker_loop():
                 method = "text_ai"
 
             # =========================
-            # EXPERIENCE
+            # EXPERIENCE (EXTRACTED)
             # =========================
             cv_exp = float(extracted.get("experience_years") or 0)
 
             exp_ok = check_experience(cv_exp, exp_type, required_exp)
 
             # =========================
-            # EVALUATION
+            # EVALUATION (VECTOR / MATCH ENGINE)
             # =========================
-            is_selected = evaluate_candidate(
+            result = evaluate_candidate(
                 extracted,
                 required_skills,
                 required_quals,
+                exp_type,
                 required_exp
             )
+
+            is_selected = result["match"]
 
             final = is_selected and exp_ok
 
@@ -183,7 +186,7 @@ async def cv_worker_loop():
             print("🏷 Final Status:", status)
 
             # =========================
-            # SAVE TO MONGO (ENRICHED)
+            # SAVE TO MONGO
             # =========================
             cv_collection.insert_one({
                 "batch_id": batch_id,
