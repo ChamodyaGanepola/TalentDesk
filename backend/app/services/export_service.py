@@ -31,6 +31,7 @@ def export_batch_shortlisted(batch_id):
         "CV File",
         "Email Address",
         "Contact No",
+        "SKills",
         "Total Work Experience",
         "Professional Qualifications"
     ])
@@ -46,6 +47,7 @@ def export_batch_shortlisted(batch_id):
             candidate.get("file_name", ""),
             candidate.get("email", ""),
             candidate.get("contact_no", ""),
+             ", ".join(candidate.get("skills", [])),
             candidate.get("experience_years", 0),
             ", ".join(
                 candidate.get(
