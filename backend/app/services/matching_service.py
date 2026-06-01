@@ -89,13 +89,17 @@ def evaluate_candidate(
     cv_skills = set(clean_list(cv.get("skills")))
     cv_quals = cv.get("qualifications", [])
     cv_exp = float(cv.get("experience_years") or 0)
+    print("CV Skills:", cv_skills)
+    print("CV Qualifications:", cv_quals)
+    print("CV Experience:", cv_exp)
 
     # =========================
     # REQUIRED DATA
     # =========================
     required_skills = set(clean_list(required_skills))
+    print("Required Skills:", required_skills)
     required_quals = required_quals or []
-
+    print("Required Qualifications:", required_quals)
     # =========================
     # RULE 1: SKILLS (STRICT MATCH)
     # =========================
@@ -108,7 +112,7 @@ def evaluate_candidate(
     # RULE 2: EXPERIENCE
     # =========================
     exp_ok = check_experience(cv_exp, exp_type, exp_value)
-
+    print(f"Experience Check: CV={cv_exp} | Type={exp_type} | Required={exp_value}")
     # =========================
     # RULE 3: QUALIFICATIONS (VECTOR MATCH)
     # =========================

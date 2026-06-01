@@ -127,19 +127,35 @@ async def upload_cvs(
     # SAVE SKILLS (AUTO ADD NEW)
     # =========================
     for skill in parsed_skills:
+     row = db.execute(text("""
+        SELECT id FROM skills WHERE name=:name
+    """), {"name": skill.strip().lower()}).fetchone()
+
+    if row:
         db.execute(text("""
-            INSERT IGNORE INTO skills(name)
-            VALUES(:name)
-        """), {"name": skill.strip().lower()})
+            INSERT INTO batch_skills(batch_id, skill_id)
+            VALUES(:batch_id, :skill_id)
+        """), {
+            "batch_id": batch_id,
+            "skill_id": row[0]
+        })
 
     # =========================
     # SAVE QUALIFICATIONS (AUTO ADD NEW)
     # =========================
     for q in parsed_qualifications:
+     row = db.execute(text("""
+        SELECT id FROM qualifications WHERE name=:name
+    """), {"name": q.strip().lower()}).fetchone()
+
+    if row:
         db.execute(text("""
-            INSERT IGNORE INTO qualifications(name)
-            VALUES(:name)
-        """), {"name": q.strip().lower()})
+            INSERT INTO batch_qualifications(batch_id, qualification_id)
+            VALUES(:batch_id, :qualification_id)
+        """), {
+            "batch_id": batch_id,
+            "qualification_id": row[0]
+        })
 
     # =========================
     # SAVE FILES
