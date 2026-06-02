@@ -142,8 +142,8 @@ async def cv_worker_loop():
             # =========================
             req = load_batch_requirements(db, batch_id)
 
-            required_skills = set(req["skills"])
-            required_quals = set(req["qualifications"])
+            required_skills = list(req["skills"])         # <-- list, safe for JSON
+            required_quals = list(req["qualifications"])  # <-- list, safe for JSON
             required_exp = req["experience_value"]
             exp_type = req["experience_type"]
 
@@ -198,9 +198,8 @@ async def cv_worker_loop():
                 "experience_years": extracted.get("experience_years"),
                 "profession": extracted.get("profession"),
 
-                "skills": extracted.get("skills", []),
-                "qualifications": extracted.get("qualifications", []),
-
+                "skills": list(extracted.get("skills", [])),    
+                "qualifications": list(extracted.get("qualifications", [])),
                 "file_name": file_name,
                 "file_url": file_url,
 

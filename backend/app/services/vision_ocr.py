@@ -7,48 +7,78 @@ from openai import OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+# =========================
+# PDF → IMAGES
+# =========================
 def pdf_to_images(file_path: str):
     doc = fitz.open(file_path)
     images = []
 
     for page in doc:
         pix = page.get_pixmap(dpi=200)
-        images.append(pix.tobytes("png"))
+        img_bytes = pix.tobytes("jpeg")
+        images.append(img_bytes)
 
     return images
 
 
+# =========================
+# BASE64 ENCODER
+# =========================
 def image_to_base64(img_bytes):
     return base64.b64encode(img_bytes).decode()
 
 
+# =========================
+# SAFE JSON PARSER
+# =========================
+def safe_json_load(text: str):
+    try:
+        text = text.strip()
+
+        if "```" in text:
+            text = text.replace("```json", "").replace("```", "").strip()
+
+        return json.loads(text)
+
+    except Exception as e:
+        print("❌ JSON parse error:", e)
+        print("RAW:", text)
+        return None
+
+
+# =========================
+# MAIN VISION OCR (FIXED)
+# =========================
 def vision_ocr(file_path: str):
 
     images = pdf_to_images(file_path)
 
-    full_result = {
-        "name": "",
-        "email": "",
-        "contact_no": "",
-        "skills": [],
-        "experience_years": 0.0,
-        "qualifications": [],
-        "profession": "",
-        "internships": [],
-        "raw_text": ""   # ✅ FIXED COMMA ISSUE
-    }
+    # build ALL images in one request
+    image_payload = []
 
     for img in images:
-
         base64_img = image_to_base64(img)
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """
-Extract CV into STRICT JSON ONLY:
+        image_payload.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_img}"
+            }
+        })
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        temperature=0,
+        messages=[
+            {
+                "role": "system",
+                "content": """
+You are a professional CV extraction engine.
+
+Extract FULL CV information from ALL provided pages.
+
+Return ONLY valid JSON:
 
 {
   "name": "",
@@ -61,62 +91,42 @@ Extract CV into STRICT JSON ONLY:
   "internships": []
 }
 
-Rules:
-- Extract email address
-- Extract phone number
-- Qualifications should contain degrees, diplomas, certifications
-- internships MUST be counted in experience_years
-- Return ONLY valid JSON
+RULES:
+- Merge data across all pages
+- Remove duplicates
+- skills MUST be lowercase
+- qualifications must be full official names
+- internships contribute to experience_years
+- NEVER return markdown or explanations
 """
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Extract CV"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_img}"
-                            }
-                        }
-                    ]
-                }
-            ]
-        )
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract this full CV accurately from all pages."},
+                    *image_payload
+                ]
+            }
+        ]
+    )
 
-        try:
-            data = json.loads(response.choices[0].message.content)
+    data = safe_json_load(response.choices[0].message.content)
 
-            # =========================
-            # MERGE PAGES SAFELY
-            # =========================
-            full_result["skills"] += data.get("skills", [])
-            full_result["qualifications"] += data.get("qualifications", [])
+    # fallback safe return
+    if not data:
+        return {
+            "name": "",
+            "email": "",
+            "contact_no": "",
+            "skills": [],
+            "experience_years": 0.0,
+            "qualifications": [],
+            "profession": "",
+            "internships": []
+        }
 
-            full_result["experience_years"] = max(
-                full_result["experience_years"],
-                data.get("experience_years", 0)
-            )
+    # final cleanup
+    data["skills"] = list(set([s.lower() for s in data.get("skills", [])]))
+    data["qualifications"] = list(set(data.get("qualifications", [])))
 
-            if not full_result["name"]:
-                full_result["name"] = data.get("name", "")
-
-            if not full_result["email"]:
-                full_result["email"] = data.get("email", "")
-
-            if not full_result["contact_no"]:
-                full_result["contact_no"] = data.get("contact_no", "")
-
-            if not full_result["profession"]:
-                full_result["profession"] = data.get("profession", "")
-
-        except Exception:
-            continue
-
-    # =========================
-    # CLEAN DUPLICATES
-    # =========================
-    full_result["skills"] = list(set(full_result["skills"]))
-    full_result["qualifications"] = list(set(full_result["qualifications"]))
-
-    return full_result
+    return data

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 
@@ -7,14 +7,10 @@ from app.routes.upload import router as upload_router
 from app.ws.manager import manager
 from app.core.cv_worker import cv_worker_loop
 from fastapi.staticfiles import StaticFiles
-import os
-
 
 app = FastAPI()
 
-# ======================
 # CORS
-# ======================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -23,38 +19,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount(
-    "/exports",
-    StaticFiles(directory="exports"),
-    name="exports"
-)
-# ======================
-# ROUTES
-# ======================
+# Static exports
+app.mount("/exports", StaticFiles(directory="exports"), name="exports")
+
+# Routes
 app.include_router(auth_router)
 app.include_router(upload_router)
 
 
-# ======================
-# START WORKER AUTOMATICALLY
-# ======================
+# START WORKER (clean modern style)
 @app.on_event("startup")
-async def startup_event():
+async def startup():
     asyncio.create_task(cv_worker_loop())
-    print("🔥 Background CV worker started")
+    print("CV worker started")
 
 
-# ======================
-# WEBSOCKET
-# ======================
+# WebSocket
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
-
     await manager.connect(websocket)
 
     try:
         while True:
             await websocket.receive_text()
-
-    except WebSocketDisconnect:
+    finally:
         manager.disconnect(websocket)

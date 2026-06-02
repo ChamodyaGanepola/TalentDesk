@@ -13,7 +13,6 @@ export default function UploadFilterModal({
   onClose,
   onSuccess,
 }: Props) {
-
   const API = process.env.NEXT_PUBLIC_API_URL;
 
   const [skills, setSkills] = useState<string[]>([]);
@@ -24,13 +23,15 @@ export default function UploadFilterModal({
 
   const [experienceType, setExperienceType] = useState("minimum");
   const [experienceValue, setExperienceValue] = useState("0.7");
+
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
 
   const [newSkill, setNewSkill] = useState("");
   const [newQualification, setNewQualification] = useState("");
 
   // =========================
-  // LOAD FROM DB (SLOW OK)
+  // LOAD SKILLS / QUALIFICATIONS
   // =========================
   useEffect(() => {
     const load = async () => {
@@ -50,6 +51,7 @@ export default function UploadFilterModal({
     load();
   }, []);
 
+  // reset when new files selected
   useEffect(() => {
     if (!files) return;
 
@@ -57,8 +59,12 @@ export default function UploadFilterModal({
     setSelectedQualifications([]);
     setExperienceType("minimum");
     setExperienceValue("0.7");
+    setMessage("");
   }, [files]);
 
+  // =========================
+  // TOGGLES
+  // =========================
   const toggleSkill = (skill: string) => {
     setSelectedSkills(prev =>
       prev.includes(skill)
@@ -76,7 +82,7 @@ export default function UploadFilterModal({
   };
 
   // =========================
-  // REFRESH FUNCTIONS
+  // REFRESH
   // =========================
   const refreshSkills = async () => {
     const res = await fetch(`${API}/skills`);
@@ -101,7 +107,7 @@ export default function UploadFilterModal({
     });
 
     setNewSkill("");
-    await refreshSkills(); // 🔥 LIVE UPDATE
+    refreshSkills();
   };
 
   // =========================
@@ -117,14 +123,17 @@ export default function UploadFilterModal({
     });
 
     setNewQualification("");
-    await refreshQualifications(); // 🔥 LIVE UPDATE
+    refreshQualifications();
   };
 
   // =========================
   // UPLOAD
   // =========================
   const handleUpload = async () => {
+    if (loading) return;
+
     setLoading(true);
+    setMessage("");
 
     const formData = new FormData();
 
@@ -146,32 +155,67 @@ export default function UploadFilterModal({
       const data = await res.json();
 
       if (data.success) {
-        onSuccess();
-        onClose();
+        setMessage("✅ Upload successful! Processing started...");
+
+        setTimeout(() => {
+          onSuccess();
+          onClose();
+        }, 1200);
       } else {
-        alert(data.message || "Upload failed");
+        setMessage("❌ Upload failed: " + (data.message || "Unknown error"));
       }
 
+    } catch (err) {
+      setMessage("❌ Server error");
     } finally {
       setLoading(false);
     }
   };
 
+  // =========================
+  // CLOSE HANDLER
+  // =========================
+  const handleClose = () => {
+    if (loading) return;
+
+    setMessage("");
+    setSelectedSkills([]);
+    setSelectedQualifications([]);
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
 
-      <div className="bg-white w-full max-w-3xl rounded-3xl p-6 max-h-[90vh] overflow-y-auto">
+      {/* BACKDROP */}
+      <div
+        className="absolute inset-0 bg-black/60"
+        onClick={handleClose}
+      />
 
-        <h2 className="text-2xl font-bold mb-6">CV Filter Setup</h2>
+      {/* MODAL */}
+      <div
+        className="relative bg-white text-black w-full max-w-3xl rounded-3xl p-6 max-h-[90vh] overflow-y-auto z-10"
+        onClick={(e) => e.stopPropagation()}
+      >
+
+        <h2 className="text-2xl font-bold mb-4">CV Filter Setup</h2>
+
+        {/* MESSAGE */}
+        {message && (
+          <div className="mb-4 px-4 py-3 rounded-xl bg-slate-100 text-sm font-medium">
+            {message}
+          </div>
+        )}
 
         {/* EXPERIENCE */}
         <div className="mb-6">
-          <h3 className="font-semibold mb-3">Experience</h3>
+          <h3 className="font-semibold mb-2">Experience</h3>
 
           <select
             value={experienceType}
             onChange={(e) => setExperienceType(e.target.value)}
-            className="border px-3 py-2 rounded-xl w-full mb-3"
+            className="border px-3 py-2 rounded-xl w-full mb-2"
           >
             <option value="minimum">Minimum</option>
             <option value="more_than">More Than</option>
@@ -180,7 +224,6 @@ export default function UploadFilterModal({
 
           <input
             type="number"
-            step="0.1"
             value={experienceValue}
             onChange={(e) => setExperienceValue(e.target.value)}
             className="border px-3 py-2 rounded-xl w-full"
@@ -189,19 +232,16 @@ export default function UploadFilterModal({
 
         {/* SKILLS */}
         <div className="mb-6">
-          <h3 className="font-semibold mb-3">Skills</h3>
+          <h3 className="font-semibold mb-2">Skills</h3>
 
-          <div className="flex gap-2 mb-3">
+          <div className="flex gap-2 mb-2">
             <input
               value={newSkill}
               onChange={(e) => setNewSkill(e.target.value)}
-              placeholder="Add new skill"
               className="border px-3 py-2 rounded-xl w-full"
+              placeholder="Add skill"
             />
-            <button
-              onClick={addSkill}
-              className="bg-cyan-600 text-white px-4 rounded-xl"
-            >
+            <button onClick={addSkill} className="bg-cyan-600 text-white px-4 rounded-xl">
               Add
             </button>
           </div>
@@ -222,19 +262,16 @@ export default function UploadFilterModal({
 
         {/* QUALIFICATIONS */}
         <div className="mb-6">
-          <h3 className="font-semibold mb-3">Qualifications</h3>
+          <h3 className="font-semibold mb-2">Qualifications</h3>
 
-          <div className="flex gap-2 mb-3">
+          <div className="flex gap-2 mb-2">
             <input
               value={newQualification}
               onChange={(e) => setNewQualification(e.target.value)}
-              placeholder="Add new qualification"
               className="border px-3 py-2 rounded-xl w-full"
+              placeholder="Add qualification"
             />
-            <button
-              onClick={addQualification}
-              className="bg-cyan-600 text-white px-4 rounded-xl"
-            >
+            <button onClick={addQualification} className="bg-cyan-600 text-white px-4 rounded-xl">
               Add
             </button>
           </div>
@@ -255,7 +292,10 @@ export default function UploadFilterModal({
 
         {/* ACTIONS */}
         <div className="flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 border rounded-xl">
+          <button
+            onClick={handleClose}
+            className="px-4 py-2 border rounded-xl"
+          >
             Cancel
           </button>
 

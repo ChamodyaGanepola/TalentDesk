@@ -1,5 +1,5 @@
 from app.services.vector_service import get_embedding, cosine_similarity
-
+from app.services.qualification_ai import normalize_and_match_qualifications
 
 # =========================
 # CLEAN LIST
@@ -116,7 +116,14 @@ def evaluate_candidate(
     # =========================
     # RULE 3: QUALIFICATIONS (VECTOR MATCH)
     # =========================
-    qual_ok = qualification_vector_match(cv_quals, required_quals)
+   
+
+    ai_result = normalize_and_match_qualifications(cv_quals, required_quals)
+    if ai_result["match"]:
+       qual_ok = True
+    else:
+    # fallback to vector logic
+       qual_ok = qualification_vector_match(cv_quals, required_quals)
 
     # =========================
     # FINAL SCORE SYSTEM (SAFE + FLEXIBLE)
