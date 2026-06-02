@@ -106,28 +106,28 @@ export default function ResumeViewerPage() {
                   </p>
                 </div>
 
-              <button
-  className="text-cyan-600 font-medium"
-  onClick={async () => {
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${file.file}`);
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
+                <button
+                  className="text-cyan-600 font-medium"
+                  onClick={async () => {
+                    try {
+                      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${file.file}`);
+                      const blob = await res.blob();
+                      const url = window.URL.createObjectURL(blob);
 
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = file.file.split("/").pop() || "resume.xlsx";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("Download failed", err);
-    }
-  }}
->
-  Download Excel
-</button>
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = file.file.split("/").pop() || "resume.xlsx";
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      window.URL.revokeObjectURL(url);
+                    } catch (err) {
+                      console.error("Download failed", err);
+                    }
+                  }}
+                >
+                  Download Excel
+                </button>
               </div>
             ))
           )}
@@ -148,9 +148,8 @@ export default function ResumeViewerPage() {
               <button
                 key={p}
                 onClick={() => fetchFiles(p)}
-                className={`px-3 py-2 rounded ${
-                  p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
-                }`}
+                className={`px-3 py-2 rounded ${p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
+                  }`}
               >
                 {p}
               </button>

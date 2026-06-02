@@ -70,11 +70,33 @@ export default function UploadSection({ onUploadSuccess }: Props) {
         className="hidden"
         id="cvUpload"
         disabled={uploading}
+        accept=".pdf,.doc,.docx,.xls,.xlsx"
         onChange={(e) => {
-          if (e.target.files) {
-            setSelectedFiles(e.target.files);
-            setOpenModal(true);
+          if (!e.target.files) return;
+
+          const files = Array.from(e.target.files);
+
+          const allowed = files.filter((file) => {
+            const ext = file.name.split(".").pop()?.toLowerCase();
+            return (
+              ext === "pdf" ||
+              ext === "doc" ||
+              ext === "docx" ||
+              ext === "xlsx" ||
+              ext === "xls"
+            );
+          });
+
+          if (allowed.length !== files.length) {
+            setSuccessMessage("Only CV (PDF/DOC) or Excel files are allowed");
+            return;
           }
+
+          const dt = new DataTransfer();
+          allowed.forEach((f) => dt.items.add(f));
+
+          setSelectedFiles(dt.files);
+          setOpenModal(true);
         }}
       />
 

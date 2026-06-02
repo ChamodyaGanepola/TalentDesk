@@ -175,12 +175,19 @@ export default function DashboardPage() {
                 key={index}
                 className="flex items-center justify-between border rounded-2xl px-5 py-4 "
               >
-                <div>
-                  <h3 className="font-medium">{file.filename}</h3>
-                  <p className="text-sm text-slate-500">
-                    {new Date(file.created_at).toLocaleString()}
-                  </p>
-                </div>
+               <div>
+<a
+  href={`${API}/uploads/${file.file_url.split(/[\\/]/).pop()}`}
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  {file.filename}
+</a>
+
+  <p className="text-sm text-slate-500">
+    {new Date(file.created_at + "Z").toLocaleString()}
+  </p>
+</div>
 
                 <span className="bg-cyan-100 text-cyan-700 px-4 py-1 rounded-full text-sm">
                   {file.status}

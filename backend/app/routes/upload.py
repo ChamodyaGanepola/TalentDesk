@@ -193,7 +193,7 @@ async def upload_cvs(
             "created_at": datetime.now(timezone.utc)
         })
 
-        uploaded_files.append(file.filename)
+        uploaded_files.append(unique_name)
 
     db.commit()
     await broadcast_stats()
@@ -230,6 +230,8 @@ def recent_uploads(page: int = 1, per_page: int = 10, db: Session = Depends(get_
             {
                 "id": r["id"],
                 "filename": r["file_name"],
+                "file_url": r["file_url"],
+                "stored_file": r["file_url"].split("/")[-1],
                 "status": r["status"],
                 "created_at": r["created_at"].isoformat()
             }

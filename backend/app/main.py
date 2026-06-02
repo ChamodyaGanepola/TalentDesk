@@ -1,7 +1,7 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
-
+from fastapi.staticfiles import StaticFiles
 from app.routes.auth import router as auth_router
 from app.routes.upload import router as upload_router
 from app.ws.manager import manager
@@ -20,8 +20,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Static exports
 app.mount("/exports", StaticFiles(directory="exports"), name="exports")
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Routes
 app.include_router(auth_router)

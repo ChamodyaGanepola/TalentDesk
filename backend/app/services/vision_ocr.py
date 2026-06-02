@@ -48,13 +48,12 @@ def safe_json_load(text: str):
 
 
 # =========================
-# MAIN VISION OCR (FIXED)
+# MAIN VISION OCR (IMPROVED)
 # =========================
 def vision_ocr(file_path: str):
 
     images = pdf_to_images(file_path)
 
-    # build ALL images in one request
     image_payload = []
 
     for img in images:
@@ -74,9 +73,9 @@ def vision_ocr(file_path: str):
             {
                 "role": "system",
                 "content": """
-You are a professional CV extraction engine.
+You are a professional CV extraction engine for recruitment screening.
 
-Extract FULL CV information from ALL provided pages.
+Extract FULL CV information from ALL pages.
 
 Return ONLY valid JSON:
 
@@ -91,19 +90,86 @@ Return ONLY valid JSON:
   "internships": []
 }
 
-RULES:
-- Merge data across all pages
+========================
+CRITICAL RULES
+========================
+
+1. EXPERIENCE (VERY IMPORTANT):
+- ONLY count:
+  ✔ internships
+  ✔ real job experience
+
+- DO NOT count:
+  ✘ projects
+  ✘ university assignments
+  ✘ hackathons (unless internship/job)
+
+- Convert:
+  3 months = 0.25
+  6 months = 0.5
+  1 year = 1.0
+  1.5 years = 1.5
+
+- SUM all internships + jobs
+
+2. SKILLS:
+- Extract ALL technical skills from ANY section
+- MUST include skills from:
+  - projects (ONLY for skill extraction)
+  - internships
+  - work experience
+- Normalize to lowercase
 - Remove duplicates
-- skills MUST be lowercase
-- qualifications must be full official names
-- internships contribute to experience_years
-- NEVER return markdown or explanations
+
+3. QUALIFICATIONS:
+- Include degrees, diplomas, certifications
+- Keep full official names
+4. INTERNSHIPS / JOBS FORMAT (CRITICAL):
+
+Extract ONLY real work experience:
+
+✔ internships
+✔ paid jobs
+
+DO NOT include:
+✘ projects
+✘ university work
+✘ hackathons
+
+Return format:
+
+"internships": [
+  {
+    "type": "internship" or "job",
+    "company": "",
+    "role": "",
+    "start_date": "YYYY-MM",
+    "end_date": "YYYY-MM or present"
+  }
+]
+
+Rules:
+- Convert all dates to YYYY-MM format
+- If only year exists (2024), convert to 2024-01
+- If month not known, assume 01
+- If “Present” or similar to "current"→ use "present"
+- Do NOT calculate experience here
+
+
+
+
+========================
+MERGE RULE
+========================
+If multiple pages:
+- Combine all data
+- Remove duplicates
 """
             },
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Extract this full CV accurately from all pages."},
+                    {"type": "text", "text": "Extract full CV accurately from all pages."},
                     *image_payload
                 ]
             }
@@ -112,7 +178,9 @@ RULES:
 
     data = safe_json_load(response.choices[0].message.content)
 
-    # fallback safe return
+    # =========================
+    # FALLBACK
+    # =========================
     if not data:
         return {
             "name": "",
@@ -125,8 +193,10 @@ RULES:
             "internships": []
         }
 
-    # final cleanup
-    data["skills"] = list(set([s.lower() for s in data.get("skills", [])]))
+    # =========================
+    # CLEANUP
+    # =========================
+    data["skills"] = list(set([s.lower().strip() for s in data.get("skills", [])]))
     data["qualifications"] = list(set(data.get("qualifications", [])))
 
     return data
