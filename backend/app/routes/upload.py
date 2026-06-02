@@ -7,7 +7,8 @@ from datetime import timezone, datetime
 import os
 import uuid
 import json
-
+from fastapi import Query
+from datetime import datetime
 router = APIRouter()
 
 UPLOAD_DIR = "uploads"
@@ -209,25 +210,35 @@ async def upload_cvs(
 # RECENT UPLOADS
 # =========================
 @router.get("/upload/recent")
-def recent_uploads(db: Session = Depends(get_db)):
+def recent_uploads(page: int = 1, per_page: int = 10, db: Session = Depends(get_db)):
+
+    offset = (page - 1) * per_page
 
     rows = db.execute(text("""
         SELECT id, batch_id, file_name, file_url, status, created_at
         FROM uploads
         ORDER BY created_at DESC
-        LIMIT 10
-    """)).mappings().all()
+        LIMIT :per_page OFFSET :offset
+    """), {"per_page": per_page, "offset": offset}).mappings().all()
 
-    return [
-        {
-            "id": r["id"],
-            "filename": r["file_name"],
-            "status": r["status"],
-            "created_at": r["created_at"].isoformat()
-        }
-        for r in rows
-    ]
+    total = db.execute(text("""
+        SELECT COUNT(*) as count FROM uploads
+    """)).mappings().first()["count"]
 
+    return {
+        "data": [
+            {
+                "id": r["id"],
+                "filename": r["file_name"],
+                "status": r["status"],
+                "created_at": r["created_at"].isoformat()
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page
+    }
 
 # =========================
 # STATS
@@ -296,21 +307,49 @@ def get_export(batch_id: str, db: Session = Depends(get_db)):
 
     return row or {"excel_file": None}
 
-@router.get("/batch/excels")
-def get_excels(db: Session = Depends(get_db)):
 
-    rows = db.execute(text("""
+
+@router.get("/batch/excels")
+def get_excels(
+    page: int = 1,
+    per_page: int = 10,
+    date: str = Query(None),  # optional date filter
+    db: Session = Depends(get_db)
+):
+    offset = (page - 1) * per_page
+    params = {"per_page": per_page, "offset": offset}
+
+    sql = """
         SELECT id, batch_id, excel_file, created_at
         FROM batch_exports
-        ORDER BY created_at DESC
-    """)).mappings().all()
+    """
 
-    return [
-        {
-            "id": r["id"],
-            "batch_id": r["batch_id"],
-            "file": r["excel_file"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None
-        }
-        for r in rows
-    ]
+    if date:
+        # filter by date only (YYYY-MM-DD)
+        sql += " WHERE DATE(created_at) = :date"
+        params["date"] = date
+
+    sql += " ORDER BY created_at DESC LIMIT :per_page OFFSET :offset"
+
+    rows = db.execute(text(sql), params).mappings().all()
+
+    # total count for pagination
+    count_sql = "SELECT COUNT(*) as count FROM batch_exports"
+    if date:
+        count_sql += " WHERE DATE(created_at) = :date"
+    total = db.execute(text(count_sql), {"date": date} if date else {}).mappings().first()["count"]
+
+    return {
+        "data": [
+            {
+                "id": r["id"],
+                "batch_id": r["batch_id"],
+                "file": r["excel_file"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "per_page": per_page
+    }

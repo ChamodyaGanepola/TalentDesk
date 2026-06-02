@@ -155,18 +155,18 @@ export default function UploadFilterModal({
       const data = await res.json();
 
       if (data.success) {
-        setMessage("✅ Upload successful! Processing started...");
+        setMessage("Upload successful! Processing started...");
 
         setTimeout(() => {
           onSuccess();
           onClose();
         }, 1200);
       } else {
-        setMessage("❌ Upload failed: " + (data.message || "Unknown error"));
+        setMessage("Upload failed: " + (data.message || "Unknown error"));
       }
 
     } catch (err) {
-      setMessage("❌ Server error");
+      setMessage("Server error");
     } finally {
       setLoading(false);
     }

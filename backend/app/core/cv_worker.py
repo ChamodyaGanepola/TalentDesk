@@ -11,6 +11,7 @@ from app.services.matching_service import evaluate_candidate
 import fitz  # PyMuPDF
 
 from app.services.export_service import export_batch_shortlisted
+from app.ws.manager import manager
 
 
 # =========================
@@ -231,38 +232,36 @@ async def cv_worker_loop():
             # =========================
             if batch_completed(db, batch_id):
 
-                existing = db.execute(text("""
-                    SELECT id FROM batch_exports
-                    WHERE batch_id=:batch_id
-                """), {"batch_id": batch_id}).fetchone()
+                 existing = db.execute(text("""
+                 SELECT id FROM batch_exports
+                 WHERE batch_id=:batch_id
+                 """), {"batch_id": batch_id}).fetchone()
 
-                if not existing:
+                 if not existing:
 
-                    excel_path = export_batch_shortlisted(batch_id)
+                     excel_path = export_batch_shortlisted(batch_id)
 
-                    if excel_path:
+                     if excel_path:
 
-                        db.execute(text("""
-                            INSERT INTO batch_exports
-                            (
-                                batch_id,
-                                excel_file
-                            )
-                            VALUES
-                            (
-                                :batch_id,
-                                :excel_file
-                            )
-                        """), {
-                            "batch_id": batch_id,
-                            "excel_file": excel_path
-                        })
+                      db.execute(text("""
+                INSERT INTO batch_exports (batch_id, excel_file)
+                VALUES (:batch_id, :excel_file)
+            """), {
+                "batch_id": batch_id,
+                "excel_file": excel_path
+            })
 
-                        db.commit()
+            db.commit()
 
-                        print(f"📊 Excel Generated: {excel_path}")
+            # WebSocket notify 
+            await manager.broadcast({
+                "event": "excel_exported",
+                "batch_id": batch_id,
+                "file": excel_path
+            })
 
-            print(f"✅ DONE: {file_name}")
+            print(f"📊 Excel Generated: {excel_path}")
+            
 
         except Exception as e:
             print("❌ Worker Error:", e)
