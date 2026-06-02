@@ -1,6 +1,6 @@
 from app.services.vector_service import get_embedding, cosine_similarity
 from app.services.qualification_ai import normalize_and_match_qualifications
-
+from difflib import get_close_matches
 # =========================
 # CLEAN LIST
 # =========================
@@ -71,7 +71,15 @@ def qualification_vector_match(cv_quals, req_quals):
 
     return True
 
+def skill_match(cv_skills, required_skills, threshold=0.8):
+    cv_skills_lower = {s.lower() for s in cv_skills}
 
+    for req in required_skills:
+        matches = get_close_matches(req.lower(), cv_skills_lower, n=1, cutoff=threshold)
+        if not matches:
+            return False
+
+    return True
 # =========================
 # MAIN EVALUATION FUNCTION (FIXED FOR WORKER)
 # =========================
@@ -104,9 +112,9 @@ def evaluate_candidate(
     # RULE 1: SKILLS (STRICT MATCH)
     # =========================
     skills_ok = (
-        len(required_skills) == 0
-        or required_skills.issubset(cv_skills)
-    )
+     len(required_skills) == 0
+     or skill_match(cv_skills, required_skills)
+  )
 
     # =========================
     # RULE 2: EXPERIENCE

@@ -6,6 +6,7 @@ from app.routes.auth import router as auth_router
 from app.routes.upload import router as upload_router
 from app.ws.manager import manager
 from app.core.cv_worker import cv_worker_loop
+from starlette.websockets import WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
@@ -35,12 +36,12 @@ async def startup():
 
 
 # WebSocket
+
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
-    await manager.connect(websocket)
-
+    await websocket.accept()
     try:
         while True:
             await websocket.receive_text()
-    finally:
-        manager.disconnect(websocket)
+    except WebSocketDisconnect:
+        print("Client disconnected")

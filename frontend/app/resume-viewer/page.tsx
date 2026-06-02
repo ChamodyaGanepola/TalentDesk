@@ -106,33 +106,28 @@ export default function ResumeViewerPage() {
                   </p>
                 </div>
 
-                <button
-                  onClick={async () => {
-                    try {
-                      const res = await fetch(
-                        `${process.env.NEXT_PUBLIC_API_URL}/${file.file}`
-                      );
+              <button
+  className="text-cyan-600 font-medium"
+  onClick={async () => {
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${file.file}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
 
-                      const blob = await res.blob();
-                      const url = window.URL.createObjectURL(blob);
-
-                      const link = document.createElement("a");
-                      link.href = url;
-                      link.download = file.file;
-
-                      document.body.appendChild(link);
-                      link.click();
-
-                      link.remove();
-                      window.URL.revokeObjectURL(url);
-                    } catch (err) {
-                      console.error("Download failed", err);
-                    }
-                  }}
-                  className="text-cyan-600 font-medium"
-                >
-                  Download Excel
-                </button>
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.file.split("/").pop() || "resume.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Download failed", err);
+    }
+  }}
+>
+  Download Excel
+</button>
               </div>
             ))
           )}
