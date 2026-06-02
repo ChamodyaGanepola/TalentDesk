@@ -110,6 +110,28 @@ def evaluate_qualifications(cv_quals, required_quals):
     return req_set.issubset(cv_set)
 
 
+# SAFE WRAPPER FOR OPENAI RESULT
+def safe_qualification_match(cv_quals, required_quals):
+    try:
+        result = normalize_and_match_qualifications(cv_quals, required_quals)
+
+        # FIX: if function returns bool accidentally
+        if isinstance(result, bool):
+            return {"match": result, "reason": ""}
+
+        if isinstance(result, dict):
+            return {
+                "match": result.get("match", False),
+                "reason": result.get("reason", "")
+            }
+
+        return {"match": False, "reason": "invalid_response"}
+
+    except Exception as e:
+        print("Qualification AI Error:", e)
+        return {"match": False, "reason": "error"}
+
+
 # =========================
 # MAIN WORKER LOOP
 # =========================
@@ -182,14 +204,18 @@ async def cv_worker_loop():
             )
 
             # =========================
-# QUALIFICATIONS MATCH (OpenAI)
-# =========================
-            quals_match_result = normalize_and_match_qualifications(cv_quals, required_quals)
+            # QUALIFICATIONS MATCH (FIXED)
+            # =========================
+            quals_match_result = safe_qualification_match(cv_quals, required_quals)
             quals_match = quals_match_result.get("match", False)
             reason = quals_match_result.get("reason", "")
+
             print(f"Qualifications Match: {quals_match} | Reason: {reason}")
+
             exp_match = check_experience(cv_exp, exp_type, required_exp)
+
             print(f"Skills Match: {skills_match} | Qualifications Match: {quals_match} | Experience Match: {exp_match}")
+
             final = skills_match and quals_match and exp_match
             status = "Shortlisted" if final else "Rejected"
 
@@ -230,6 +256,8 @@ async def cv_worker_loop():
 
             if batch_completed(db, batch_id):
 
+                print(f"Batch completed: {batch_id}")
+
                 existing = db.execute(text("""
                     SELECT id FROM batch_exports
                     WHERE batch_id=:batch_id
@@ -248,9 +276,6 @@ async def cv_worker_loop():
                         })
                         db.commit()
 
-                # =========================
-                # CHECK FINAL RESULT
-                # =========================
                 shortlisted_count = db.execute(text("""
                     SELECT COUNT(*)
                     FROM uploads

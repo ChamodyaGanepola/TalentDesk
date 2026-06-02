@@ -16,9 +16,13 @@ export default function UploadSection({ onUploadSuccess }: any) {
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
 
-  // =============================
-  // WEBSOCKET LISTENER
-  // =============================
+  // RESET helper
+  const resetStatusAfterDelay = () => {
+    setTimeout(() => {
+      setStatus(null);
+    }, 3000);
+  };
+
   useEffect(() => {
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
     wsRef.current = ws;
@@ -26,25 +30,26 @@ export default function UploadSection({ onUploadSuccess }: any) {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      // ❌ All rejected
+      console.log("WS EVENT:", data);
+
+      // ❌ all rejected
       if (data.event === "batch_completed_no_results") {
         setStatus("rejected");
         onUploadSuccess?.();
-        // auto-hide after 3s
-        setTimeout(() => setStatus(null), 3000);
+        resetStatusAfterDelay();
       }
 
-      // ✅ Batch done (some shortlisted exist)
+      // ✅ batch completed
       if (data.event === "batch_completed") {
         setStatus("completed");
         onUploadSuccess?.();
-        // auto-hide after 3s
-        setTimeout(() => setStatus(null), 3000);
+        resetStatusAfterDelay();
       }
 
-      // 📦 Excel generated → redirect
+      // 📦 excel exported → redirect
       if (data.event === "excel_exported") {
         setStatus("completed");
+
         setTimeout(() => {
           router.push("/resume-viewer");
         }, 800);
@@ -56,7 +61,6 @@ export default function UploadSection({ onUploadSuccess }: any) {
 
   return (
     <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed text-center">
-
       {/* ICON */}
       <div className="flex justify-center mb-5">
         <div className="w-20 h-20 rounded-full bg-cyan-100 flex items-center justify-center">
@@ -66,7 +70,6 @@ export default function UploadSection({ onUploadSuccess }: any) {
 
       <h2 className="text-2xl font-bold">Bulk Upload CVs</h2>
 
-      {/* FILE INPUT */}
       <input
         type="file"
         multiple
@@ -77,6 +80,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
           if (!e.target.files) return;
           setSelectedFiles(e.target.files);
           setOpenModal(true);
+          setStatus("processing"); // IMPORTANT FIX
         }}
       />
 
@@ -99,10 +103,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
         />
       )}
 
-      {/* =============================
-          STATUS DISPLAY (SMART UI)
-          ============================= */}
-
+      {/* STATUS */}
       {status === "processing" && (
         <p className="mt-5 text-cyan-600 font-medium animate-pulse">
           Processing CVs...
@@ -111,13 +112,13 @@ export default function UploadSection({ onUploadSuccess }: any) {
 
       {status === "rejected" && (
         <p className="mt-5 text-red-600 font-medium">
-           All CVs were rejected
+          All CVs were rejected
         </p>
       )}
 
       {status === "completed" && (
         <p className="mt-5 text-green-600 font-medium">
-           Processing completed
+          Processing completed
         </p>
       )}
     </div>

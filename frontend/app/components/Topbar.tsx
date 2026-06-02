@@ -23,7 +23,7 @@ export default function Topbar() {
 
       if (data.event === "excel_exported") {
         setNotifications((prev) => [
-          `📊 Excel exported: ${data.file}`,
+          ` Excel exported: ${data.file}`,
           ...prev,
         ]);
         setUnreadCount((prev) => prev + 1); // increment unread
@@ -64,6 +64,7 @@ export default function Topbar() {
         </div>
 */}
         {/* Bell */}
+        {/*
         <div className="relative">
           <div
             className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center cursor-pointer"
@@ -74,8 +75,10 @@ export default function Topbar() {
               <span className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
             )}
           </div>
+*/}
 
           {/* Dropdown */}
+          {/*
           {open && (
             <div className="absolute right-0 mt-2 w-80 bg-white shadow-lg rounded-xl border z-50">
               <div className="p-2 border-b font-semibold">
@@ -99,6 +102,7 @@ export default function Topbar() {
             </div>
           )}
         </div>
+        */}
 
         {/* Profile */}
         <div className="flex items-center gap-3">
