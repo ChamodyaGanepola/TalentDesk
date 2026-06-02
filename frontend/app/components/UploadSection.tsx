@@ -1,61 +1,63 @@
 "use client";
 
-import { UploadCloud, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { UploadCloud } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import UploadFilterModal from "@/app/components/UploadFilterModal";
+import { useRouter } from "next/navigation";
 
-type Props = {
-  onUploadSuccess?: () => void;
-};
-
-export default function UploadSection({ onUploadSuccess }: Props) {
-  const [successMessage, setSuccessMessage] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
+export default function UploadSection({ onUploadSuccess }: any) {
   const [openModal, setOpenModal] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
 
-  const handleUpload = async (files: FileList) => {
-    setUploading(true);
+  const [status, setStatus] = useState<
+    null | "processing" | "rejected" | "completed"
+  >(null);
 
-    const formData = new FormData();
-    Array.from(files).forEach((file) => {
-      formData.append("files", file);
-    });
+  const router = useRouter();
+  const wsRef = useRef<WebSocket | null>(null);
 
-    try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/upload/cvs`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+  // =============================
+  // WEBSOCKET LISTENER
+  // =============================
+  useEffect(() => {
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
+    wsRef.current = ws;
 
-      const data = await res.json();
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
 
-      if (res.ok) {
-        setSuccessMessage(`Uploaded successfully: ${data.count} files`);
+      // ❌ All rejected
+      if (data.event === "batch_completed_no_results") {
+        setStatus("rejected");
         onUploadSuccess?.();
-      } else {
-        setSuccessMessage(data.error || "Upload failed");
+        // auto-hide after 3s
+        setTimeout(() => setStatus(null), 3000);
       }
-    } catch {
-      setSuccessMessage("Server error");
-    } finally {
-      setUploading(false);
-      setTimeout(() => setSuccessMessage(""), 3000);
-    }
-  };
+
+      // ✅ Batch done (some shortlisted exist)
+      if (data.event === "batch_completed") {
+        setStatus("completed");
+        onUploadSuccess?.();
+        // auto-hide after 3s
+        setTimeout(() => setStatus(null), 3000);
+      }
+
+      // 📦 Excel generated → redirect
+      if (data.event === "excel_exported") {
+        setStatus("completed");
+        setTimeout(() => {
+          router.push("/resume-viewer");
+        }, 800);
+      }
+    };
+
+    return () => ws.close();
+  }, []);
 
   return (
-    <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed border-cyan-300 text-center">
+    <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed text-center">
 
-      {successMessage && (
-        <div className="mb-5 bg-green-100 text-green-700 px-4 py-3 rounded-xl">
-          {successMessage}
-        </div>
-      )}
-
+      {/* ICON */}
       <div className="flex justify-center mb-5">
         <div className="w-20 h-20 rounded-full bg-cyan-100 flex items-center justify-center">
           <UploadCloud size={40} className="text-cyan-600" />
@@ -64,65 +66,59 @@ export default function UploadSection({ onUploadSuccess }: Props) {
 
       <h2 className="text-2xl font-bold">Bulk Upload CVs</h2>
 
+      {/* FILE INPUT */}
       <input
         type="file"
         multiple
-        className="hidden"
         id="cvUpload"
-        disabled={uploading}
-        accept=".pdf,.doc,.docx,.xls,.xlsx"
+        className="hidden"
+        accept=".pdf,.doc,.docx"
         onChange={(e) => {
           if (!e.target.files) return;
-
-          const files = Array.from(e.target.files);
-
-          const allowed = files.filter((file) => {
-            const ext = file.name.split(".").pop()?.toLowerCase();
-            return (
-              ext === "pdf" ||
-              ext === "doc" ||
-              ext === "docx" ||
-              ext === "xlsx" ||
-              ext === "xls"
-            );
-          });
-
-          if (allowed.length !== files.length) {
-            setSuccessMessage("Only CV (PDF/DOC) or Excel files are allowed");
-            return;
-          }
-
-          const dt = new DataTransfer();
-          allowed.forEach((f) => dt.items.add(f));
-
-          setSelectedFiles(dt.files);
+          setSelectedFiles(e.target.files);
           setOpenModal(true);
         }}
       />
 
       <label
         htmlFor="cvUpload"
-        className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl font-semibold bg-cyan-600 text-white cursor-pointer"
+        className="px-8 py-4 bg-cyan-600 text-white rounded-2xl cursor-pointer inline-flex mt-5"
       >
-        {uploading ? (
-          <>
-            <Loader2 className="animate-spin" size={20} />
-            Uploading...
-          </>
-        ) : (
-          "Upload CV Files"
-        )}
+        Upload CV Files
       </label>
 
+      {/* MODAL */}
       {openModal && selectedFiles && (
         <UploadFilterModal
           files={selectedFiles}
           onClose={() => setOpenModal(false)}
-          onSuccess={() => {
+          onProcessingStart={() => {
             setOpenModal(false);
-            onUploadSuccess?.();
+            setStatus("processing");
           }}
         />
+      )}
+
+      {/* =============================
+          STATUS DISPLAY (SMART UI)
+          ============================= */}
+
+      {status === "processing" && (
+        <p className="mt-5 text-cyan-600 font-medium animate-pulse">
+          Processing CVs...
+        </p>
+      )}
+
+      {status === "rejected" && (
+        <p className="mt-5 text-red-600 font-medium">
+           All CVs were rejected
+        </p>
+      )}
+
+      {status === "completed" && (
+        <p className="mt-5 text-green-600 font-medium">
+           Processing completed
+        </p>
       )}
     </div>
   );

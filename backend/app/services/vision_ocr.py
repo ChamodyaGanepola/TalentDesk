@@ -122,7 +122,7 @@ CRITICAL RULES
 - Remove duplicates
 
 3. QUALIFICATIONS:
-- Include degrees, diplomas, certifications
+- Include all type of degrees, diplomas, certifications
 - Keep full official names
 4. INTERNSHIPS / JOBS FORMAT (CRITICAL):
 

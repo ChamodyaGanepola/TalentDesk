@@ -3,6 +3,7 @@
 import UploadSection from "@/app/components/UploadSection";
 import StatCards from "@/app/components/StatCards";
 import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 
 function StatCardSkeleton() {
   return (
@@ -34,7 +35,7 @@ function UploadSkeleton() {
 
 export default function DashboardPage() {
   const API = process.env.NEXT_PUBLIC_API_URL;
-
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [perPage] = useState(10);
 
@@ -54,7 +55,33 @@ export default function DashboardPage() {
   // PAGE COUNT (IMPORTANT FIX)
   // =========================
   const totalPages = Math.ceil(total / perPage);
+  useEffect(() => {
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
 
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.event === "excel_exported") {
+        fetchRecentUploads(1);
+        refreshDashboard();
+        router.push("/resume-viewer");
+      }
+      if (data.event === "batch_completed_no_results") {
+        fetchRecentUploads(1);
+        refreshDashboard();
+
+        alert("All CVs were rejected in this batch");
+      }
+
+      // Batch finished (optional UI update)
+      if (data.event === "batch_completed") {
+        fetchRecentUploads(1);
+        refreshDashboard();
+      }
+    };
+
+    return () => ws.close();
+  }, []);
   // =========================
   // FETCH PAGINATED UPLOADS
   // =========================
@@ -123,22 +150,22 @@ export default function DashboardPage() {
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
+      const data = JSON.parse(event.data);
 
-  if (data.total !== undefined) {
-    setStats((prev) => ({
-      total: data.total ?? prev.total,
-      pending: data.pending ?? prev.pending,
-      shortlisted: data.shortlisted ?? prev.shortlisted,
-    }));
-  }
+      if (data.total !== undefined) {
+        setStats((prev) => ({
+          total: data.total ?? prev.total,
+          pending: data.pending ?? prev.pending,
+          shortlisted: data.shortlisted ?? prev.shortlisted,
+        }));
+      }
 
-  // 
-  if (data.total !== undefined || data.pending !== undefined) {
-    console.log("Refreshing recent uploads due to new upload");
-    fetchRecentUploads(1); // always reload latest page
-  }
-};
+      // 
+      if (data.total !== undefined || data.pending !== undefined) {
+        console.log("Refreshing recent uploads due to new upload");
+        fetchRecentUploads(1); // always reload latest page
+      }
+    };
 
     return () => {
       ws.close();
@@ -148,9 +175,9 @@ export default function DashboardPage() {
 
 
   // RENDER
-  
+
   return (
-     <div className="space-y-8 text-slate-900">
+    <div className="space-y-8 text-slate-900">
       {/* STATS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCards title="Total CVs" value={String(stats.total)} />
@@ -175,19 +202,19 @@ export default function DashboardPage() {
                 key={index}
                 className="flex items-center justify-between border rounded-2xl px-5 py-4 "
               >
-               <div>
-<a
-  href={`${API}/uploads/${file.file_url.split(/[\\/]/).pop()}`}
-  target="_blank"
-  rel="noopener noreferrer"
->
-  {file.filename}
-</a>
+                <div>
+                  <a
+                    href={`${API}/uploads/${file.file_url.split(/[\\/]/).pop()}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {file.filename}
+                  </a>
 
-  <p className="text-sm text-slate-500">
-    {new Date(file.created_at + "Z").toLocaleString()}
-  </p>
-</div>
+                  <p className="text-sm text-slate-500">
+                    {new Date(file.created_at + "Z").toLocaleString()}
+                  </p>
+                </div>
 
                 <span className="bg-cyan-100 text-cyan-700 px-4 py-1 rounded-full text-sm">
                   {file.status}
@@ -211,9 +238,8 @@ export default function DashboardPage() {
             <button
               key={p}
               onClick={() => fetchRecentUploads(p)}
-              className={`px-3 py-2 rounded ${
-                p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
-              }`}
+              className={`px-3 py-2 rounded ${p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
+                }`}
             >
               {p}
             </button>

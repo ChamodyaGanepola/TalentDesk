@@ -68,7 +68,7 @@ RULES (VERY IMPORTANT)
 - NEVER round numbers
 
 3. QUALIFICATIONS:
-- Include degrees, diplomas, certifications
+- Include all type of degrees, diplomas, certifications
 - Keep full official names
 
 

@@ -4,19 +4,30 @@ from sqlalchemy import text
 
 from app.db_mysql import SessionLocal
 from app.db_mongo import cv_collection
-
 from app.services.vision_ocr import vision_ocr
 from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
-import fitz
-
 from app.services.export_service import export_batch_shortlisted
 from app.ws.manager import manager
+from app.services.qualification_ai import normalize_and_match_qualifications
+import fitz
+import re
 
 
 # =========================
-# BATCH COMPLETION CHECK
+# HELPERS
 # =========================
+
+def parse_experience(value):
+    if not value:
+        return 0
+    try:
+        return float(value)
+    except:
+        match = re.search(r"\d+(\.\d+)?", str(value))
+        return float(match.group()) if match else 0
+
+
 def batch_completed(db, batch_id):
     remaining = db.execute(text("""
         SELECT COUNT(*)
@@ -28,50 +39,50 @@ def batch_completed(db, batch_id):
     return remaining == 0
 
 
-# =========================
-# READ FILE
-# =========================
 def read_file(path: str) -> str:
     try:
         doc = fitz.open(path)
-        text = ""
+        text_data = ""
         for page in doc:
-            text += page.get_text("text") + "\n"
-        return text.strip()
+            text_data += page.get_text("text") + "\n"
+        return text_data.strip()
     except Exception as e:
         print("PDF read error:", e)
         return ""
 
 
-# =========================
-# LOAD REQUIREMENTS
-# =========================
 def load_batch_requirements(db, batch_id: str):
-    skills = db.execute(text("""
+    skills_rows = db.execute(text("""
         SELECT s.name
         FROM batch_skills bs
         JOIN skills s ON s.id = bs.skill_id
         WHERE bs.batch_id = :batch_id
     """), {"batch_id": batch_id}).fetchall()
 
-    quals = db.execute(text("""
+    quals_rows = db.execute(text("""
         SELECT q.name
         FROM batch_qualifications bq
         JOIN qualifications q ON q.id = bq.qualification_id
         WHERE bq.batch_id = :batch_id
     """), {"batch_id": batch_id}).fetchall()
 
-    exp = db.execute(text("""
+    exp_row = db.execute(text("""
         SELECT experience_type, experience_value
         FROM upload_batches
         WHERE batch_id = :batch_id
     """), {"batch_id": batch_id}).fetchone()
 
+    skills = [r[0] for r in skills_rows] if skills_rows else []
+    qualifications = [r[0] for r in quals_rows] if quals_rows else []
+
+    experience_type = exp_row[0] if exp_row else "minimum"
+    experience_value = exp_row[1] if exp_row else 0
+
     return {
-        "skills": [r[0] for r in skills],
-        "qualifications": [r[0] for r in quals],
-        "experience_type": exp[0] if exp else "minimum",
-        "experience_value": exp[1] if exp else 0
+        "skills": skills,
+        "qualifications": qualifications,
+        "experience_type": experience_type,
+        "experience_value": experience_value
     }
 
 
@@ -89,11 +100,21 @@ def check_experience(cv_exp, req_type, req_value):
     return True
 
 
-# =========================
-# WORKER LOOP
-# =========================
-async def cv_worker_loop():
+def evaluate_qualifications(cv_quals, required_quals):
+    if not required_quals:
+        return True
 
+    cv_set = set([q.lower() for q in cv_quals or []])
+    req_set = set([q.lower() for q in required_quals])
+
+    return req_set.issubset(cv_set)
+
+
+# =========================
+# MAIN WORKER LOOP
+# =========================
+
+async def cv_worker_loop():
     print("CV Worker Started")
 
     while True:
@@ -114,7 +135,7 @@ async def cv_worker_loop():
 
             job_id, batch_id, file_url, file_name = job
 
-            print(f"\n Processing: {file_name}")
+            print(f"\nProcessing: {file_name}")
 
             # mark processing
             db.execute(text("""
@@ -123,15 +144,18 @@ async def cv_worker_loop():
             """), {"id": job_id})
             db.commit()
 
-            # requirements
+            # =========================
+            # LOAD REQUIREMENTS
+            # =========================
             req = load_batch_requirements(db, batch_id)
-
             required_skills = req["skills"]
             required_quals = req["qualifications"]
             required_exp = req["experience_value"]
             exp_type = req["experience_type"]
 
-            # read CV
+            # =========================
+            # READ CV
+            # =========================
             raw_text = read_file(file_url)
 
             if len(raw_text) < 2000:
@@ -141,31 +165,47 @@ async def cv_worker_loop():
                 extracted = extract_cv_text(raw_text)
                 method = "text_ai"
 
-            cv_exp = float(extracted.get("experience_years") or 0)
+            cv_exp = parse_experience(extracted.get("experience_years"))
+            cv_skills = extracted.get("skills", [])
+            cv_quals = extracted.get("qualifications", [])
 
-            # evaluation
-            result = evaluate_candidate(
-                extracted,
-                required_skills,
-                required_quals,
-                exp_type,
-                required_exp
+            print("Extracted Experience:", cv_exp)
+            print("Extracted Skills:", cv_skills)
+            print("Extracted Qualifications:", cv_quals)
+
+            # =========================
+            # MATCHING
+            # =========================
+            skills_match = True if not required_skills else all(
+                s.lower() in [cs.lower() for cs in cv_skills]
+                for s in required_skills
             )
 
-            exp_ok = check_experience(cv_exp, exp_type, required_exp)
-
-            final = result["match"] and exp_ok
+            # =========================
+# QUALIFICATIONS MATCH (OpenAI)
+# =========================
+            quals_match_result = normalize_and_match_qualifications(cv_quals, required_quals)
+            quals_match = quals_match_result.get("match", False)
+            reason = quals_match_result.get("reason", "")
+            print(f"Qualifications Match: {quals_match} | Reason: {reason}")
+            exp_match = check_experience(cv_exp, exp_type, required_exp)
+            print(f"Skills Match: {skills_match} | Qualifications Match: {quals_match} | Experience Match: {exp_match}")
+            final = skills_match and quals_match and exp_match
             status = "Shortlisted" if final else "Rejected"
 
             print("🏷 Final Status:", status)
 
-            # save mongo
+            # =========================
+            # SAVE TO MONGO
+            # =========================
             cv_collection.insert_one({
                 "batch_id": batch_id,
                 "name": extracted.get("name"),
                 "email": extracted.get("email"),
-                "skills": list(extracted.get("skills", [])),
-                "qualifications": list(extracted.get("qualifications", [])),
+                "skills": list(cv_skills),
+                "qualifications": list(cv_quals),
+                "experience_raw": extracted.get("experience_years"),
+                "experience_years": cv_exp,
                 "file_name": file_name,
                 "file_url": file_url,
                 "status": status,
@@ -173,17 +213,18 @@ async def cv_worker_loop():
                 "processed_at": time.time()
             })
 
-            # update mysql
+            # =========================
+            # UPDATE MYSQL
+            # =========================
             db.execute(text("""
                 UPDATE uploads
                 SET status=:status
                 WHERE id=:id
             """), {"status": status, "id": job_id})
-
             db.commit()
 
             # =========================
-            # SAFE EXPORT (FIXED)
+            # EXPORT EXCEL (ONCE PER BATCH)
             # =========================
             excel_path = None
 
@@ -199,23 +240,43 @@ async def cv_worker_loop():
 
                     if excel_path:
                         db.execute(text("""
-                            INSERT INTO batch_exports (batch_id, excel_file)
-                            VALUES (:batch_id, :excel_file)
+                            INSERT INTO batch_exports(batch_id, excel_file)
+                            VALUES(:batch_id, :excel_file)
                         """), {
                             "batch_id": batch_id,
                             "excel_file": excel_path
                         })
                         db.commit()
 
-            # broadcast ONLY if exists
-            if excel_path:
-                await manager.broadcast({
-                    "event": "excel_exported",
-                    "batch_id": batch_id,
-                    "file": excel_path
-                })
+                # =========================
+                # CHECK FINAL RESULT
+                # =========================
+                shortlisted_count = db.execute(text("""
+                    SELECT COUNT(*)
+                    FROM uploads
+                    WHERE batch_id=:batch_id
+                    AND status='Shortlisted'
+                """), {"batch_id": batch_id}).scalar()
 
-                print(f"Excel Generated: {excel_path}")
+                if shortlisted_count == 0:
+                    await manager.broadcast({
+                        "event": "batch_completed_no_results",
+                        "batch_id": batch_id,
+                        "message": "All CVs were rejected"
+                    })
+                else:
+                    await manager.broadcast({
+                        "event": "batch_completed",
+                        "batch_id": batch_id,
+                        "message": "Batch processing completed"
+                    })
+
+                if excel_path:
+                    await manager.broadcast({
+                        "event": "excel_exported",
+                        "batch_id": batch_id,
+                        "file": excel_path
+                    })
 
         except Exception as e:
             print("Worker Error:", e)

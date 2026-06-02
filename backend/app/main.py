@@ -24,7 +24,7 @@ app.add_middleware(
 # Static exports
 app.mount("/exports", StaticFiles(directory="exports"), name="exports")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-
+ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 # Routes
 app.include_router(auth_router)
 app.include_router(upload_router)
@@ -39,11 +39,14 @@ async def startup():
 
 # WebSocket
 
+
+
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
-    await websocket.accept()
+    await manager.connect(websocket)
+
     try:
         while True:
-            await websocket.receive_text()
+            await websocket.receive_text()  # keep alive
     except WebSocketDisconnect:
-        print("Client disconnected")
+        manager.disconnect(websocket)

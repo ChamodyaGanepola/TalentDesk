@@ -1,17 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
 type Props = {
   files: FileList;
   onClose: () => void;
-  onSuccess: () => void;
+  onProcessingStart: (batchId: string) => void;
 };
+
+let cachedSkills: string[] | null = null;
+let cachedQualifications: string[] | null = null;
 
 export default function UploadFilterModal({
   files,
   onClose,
-  onSuccess,
+  onProcessingStart,
 }: Props) {
   const API = process.env.NEXT_PUBLIC_API_URL;
 
@@ -21,114 +24,106 @@ export default function UploadFilterModal({
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedQualifications, setSelectedQualifications] = useState<string[]>([]);
 
-  const [experienceType, setExperienceType] = useState("minimum");
-  const [experienceValue, setExperienceValue] = useState("0.7");
-
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-
   const [newSkill, setNewSkill] = useState("");
   const [newQualification, setNewQualification] = useState("");
 
-  // =========================
-  // LOAD SKILLS / QUALIFICATIONS
-  // =========================
+  const [experienceType, setExperienceType] = useState("minimum");
+  const [experienceValue, setExperienceValue] = useState("1");
+
+  const [skillSearch, setSkillSearch] = useState("");
+  const [qualSearch, setQualSearch] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+
+  const [message, setMessage] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  // ================= LOAD MASTER DATA =================
   useEffect(() => {
     const load = async () => {
-      try {
-        const [s, q] = await Promise.all([
-          fetch(`${API}/skills`),
-          fetch(`${API}/qualifications`)
-        ]);
+      setLoadingData(true);
 
-        setSkills(await s.json());
-        setQualifications(await q.json());
-      } catch (err) {
-        console.log(err);
+      if (cachedSkills && cachedQualifications) {
+        setSkills(cachedSkills);
+        setQualifications(cachedQualifications);
+        setLoadingData(false);
+        return;
       }
+
+      const [s, q] = await Promise.all([
+        fetch(`${API}/skills`),
+        fetch(`${API}/qualifications`),
+      ]);
+
+      const sd = await s.json();
+      const qd = await q.json();
+
+      cachedSkills = sd;
+      cachedQualifications = qd;
+
+      setSkills(sd);
+      setQualifications(qd);
+      setLoadingData(false);
     };
 
     load();
   }, []);
 
-  // reset when new files selected
-  useEffect(() => {
-    if (!files) return;
-
-    setSelectedSkills([]);
-    setSelectedQualifications([]);
-    setExperienceType("minimum");
-    setExperienceValue("0.7");
-    setMessage("");
-  }, [files]);
-
-  // =========================
-  // TOGGLES
-  // =========================
+  // ================= TOGGLE SKILL / QUALIFICATION =================
   const toggleSkill = (skill: string) => {
-    setSelectedSkills(prev =>
-      prev.includes(skill)
-        ? prev.filter(s => s !== skill)
-        : [...prev, skill]
+    setSelectedSkills((prev) =>
+      prev.includes(skill) ? prev.filter((s) => s !== skill) : [...prev, skill]
     );
   };
 
   const toggleQualification = (q: string) => {
-    setSelectedQualifications(prev =>
-      prev.includes(q)
-        ? prev.filter(x => x !== q)
-        : [...prev, q]
+    setSelectedQualifications((prev) =>
+      prev.includes(q) ? prev.filter((x) => x !== q) : [...prev, q]
     );
   };
 
-  // =========================
-  // REFRESH
-  // =========================
-  const refreshSkills = async () => {
-    const res = await fetch(`${API}/skills`);
-    setSkills(await res.json());
-  };
-
-  const refreshQualifications = async () => {
-    const res = await fetch(`${API}/qualifications`);
-    setQualifications(await res.json());
-  };
-
-  // =========================
-  // ADD SKILL
-  // =========================
+  // ================= ADD NEW SKILL / QUALIFICATION =================
   const addSkill = async () => {
-    if (!newSkill.trim()) return;
+    const trimmed = newSkill.trim();
+    if (!trimmed) return;
 
-    await fetch(`${API}/skills/add`, {
+    const res = await fetch(`${API}/skills/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newSkill })
+      body: JSON.stringify({ name: trimmed }),
     });
 
+    const data = await res.json();
+    if (!data.success) return;
+
+    setSkills((prev) => [...prev, trimmed]);
+    setSelectedSkills((prev) => [...prev, trimmed]);
     setNewSkill("");
-    refreshSkills();
   };
 
-  // =========================
-  // ADD QUALIFICATION
-  // =========================
   const addQualification = async () => {
-    if (!newQualification.trim()) return;
+    const trimmed = newQualification.trim();
+    if (!trimmed) return;
 
-    await fetch(`${API}/qualifications/add`, {
+    const res = await fetch(`${API}/qualifications/add`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newQualification })
+      body: JSON.stringify({ name: trimmed }),
     });
 
+    const data = await res.json();
+    if (!data.success) return;
+
+    setQualifications((prev) => [...prev, trimmed]);
+    setSelectedQualifications((prev) => [...prev, trimmed]);
     setNewQualification("");
-    refreshQualifications();
   };
 
-  // =========================
-  // UPLOAD
-  // =========================
+
+
+
+  // ================= UPLOAD =================
   const handleUpload = async () => {
     if (loading) return;
 
@@ -137,9 +132,7 @@ export default function UploadFilterModal({
 
     const formData = new FormData();
 
-    Array.from(files).forEach(file => {
-      formData.append("files", file);
-    });
+    Array.from(files).forEach((f) => formData.append("files", f));
 
     formData.append("skills", JSON.stringify(selectedSkills));
     formData.append("qualifications", JSON.stringify(selectedQualifications));
@@ -154,147 +147,191 @@ export default function UploadFilterModal({
 
       const data = await res.json();
 
-      if (data.success) {
-        setMessage("Upload successful! Processing started...");
-
-        setTimeout(() => {
-          onSuccess();
-          onClose();
-        }, 1200);
-      } else {
-        setMessage("Upload failed: " + (data.message || "Unknown error"));
+      if (!data.success && data.uploaded === 0) {
+        setSuccess(false);
+        setMessage("Upload failed");
+        return;
       }
 
-    } catch (err) {
+      setSuccess(true);
+
+      setMessage(
+        data.failed_files?.length
+          ? `Uploaded ${data.uploaded} files\nSome failed:\n` +
+          data.failed_files
+            .map((f: any) => `${f.file} → ${f.error}`)
+            .join("\n")
+          : `Uploaded ${data.uploaded} files successfully`
+      );
+
+      onProcessingStart(data.batch_id);
+      if (data.uploaded === 0 && data.failed_files?.length) {
+        setSuccess(false);
+        setMessage("No files uploaded");
+        return;
+      }
+      setTimeout(() => {
+        onClose();
+      }, 1200);
+    } catch {
+      setSuccess(false);
       setMessage("Server error");
     } finally {
       setLoading(false);
     }
   };
 
-  // =========================
-  // CLOSE HANDLER
-  // =========================
-  const handleClose = () => {
-    if (loading) return;
+  const filteredSkills = skills.filter((s) =>
+    s.toLowerCase().includes(skillSearch.toLowerCase())
+  );
 
-    setMessage("");
-    setSelectedSkills([]);
-    setSelectedQualifications([]);
-    onClose();
-  };
+  const filteredQualifications = qualifications.filter((q) =>
+    q.toLowerCase().includes(qualSearch.toLowerCase())
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
 
-      {/* BACKDROP */}
-      <div
-        className="absolute inset-0 bg-black/60"
-        onClick={handleClose}
-      />
+      <div className="relative bg-white w-full max-w-4xl rounded-3xl shadow-2xl z-10 overflow-hidden">
+        {/* HEADER */}
+        <div className="p-6 bg-cyan-600 text-white">
+          <h2 className="text-xl font-bold">CV Filter Setup</h2>
 
-      {/* MODAL */}
-      <div
-        className="relative bg-white text-black w-full max-w-3xl rounded-3xl p-6 max-h-[90vh] overflow-y-auto z-10"
-        onClick={(e) => e.stopPropagation()}
-      >
-
-        <h2 className="text-2xl font-bold mb-4">CV Filter Setup</h2>
-
-        {/* MESSAGE */}
-        {message && (
-          <div className="mb-4 px-4 py-3 rounded-xl bg-slate-100 text-sm font-medium">
-            {message}
-          </div>
-        )}
-
-        {/* EXPERIENCE */}
-        <div className="mb-6">
-          <h3 className="font-semibold mb-2">Experience</h3>
-
-          <select
-            value={experienceType}
-            onChange={(e) => setExperienceType(e.target.value)}
-            className="border px-3 py-2 rounded-xl w-full mb-2"
-          >
-            <option value="minimum">Minimum</option>
-            <option value="more_than">More Than</option>
-            <option value="exact">Exact</option>
-          </select>
-
-          <input
-            type="number"
-            value={experienceValue}
-            onChange={(e) => setExperienceValue(e.target.value)}
-            className="border px-3 py-2 rounded-xl w-full"
-          />
+          {message && (
+            <div
+              className={`mt-3 px-4 py-2 rounded-xl text-sm whitespace-pre-line ${success ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                }`}
+            >
+              {message}
+            </div>
+          )}
         </div>
 
-        {/* SKILLS */}
-        <div className="mb-6">
-          <h3 className="font-semibold mb-2">Skills</h3>
+        {/* BODY */}
+        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+          {/* EXPERIENCE */}
+          <div className="bg-slate-50 p-4 rounded-2xl">
+            <h3 className="font-semibold mb-3">Experience</h3>
 
-          <div className="flex gap-2 mb-2">
+            <div className="grid grid-cols-2 gap-3">
+              <select
+                value={experienceType}
+                onChange={(e) => setExperienceType(e.target.value)}
+                className="bg-white p-2 rounded-xl"
+              >
+                <option value="minimum">Minimum</option>
+                <option value="more_than">More Than</option>
+                <option value="exact">Exact</option>
+              </select>
+
+              <input
+                type="number"
+                value={experienceValue}
+                onChange={(e) => setExperienceValue(e.target.value)}
+                className="bg-white p-2 rounded-xl"
+              />
+            </div>
+          </div>
+
+          {/* SKILLS */}
+          <div className="bg-slate-50 p-4 rounded-2xl">
+            <h3 className="font-semibold mb-3">Skills</h3>
+
+            {/* ADD NEW SKILL */}
+            <div className="flex gap-2 mb-3">
+              <input
+                value={newSkill}
+                onChange={(e) => setNewSkill(e.target.value)}
+                className="bg-white rounded-xl p-2 w-full"
+                placeholder="Add skill"
+              />
+              <button
+                type="button"
+                onClick={addSkill}
+                className="bg-cyan-600 text-white px-4 rounded-xl"
+              >
+                Add
+              </button>
+            </div>
+
             <input
-              value={newSkill}
-              onChange={(e) => setNewSkill(e.target.value)}
-              className="border px-3 py-2 rounded-xl w-full"
-              placeholder="Add skill"
+              value={skillSearch}
+              onChange={(e) => setSkillSearch(e.target.value)}
+              className="w-full p-2 bg-white rounded-xl mb-3"
+              placeholder="Search skills"
             />
-            <button onClick={addSkill} className="bg-cyan-600 text-white px-4 rounded-xl">
-              Add
-            </button>
+
+            <div className="grid grid-cols-2 gap-2">
+              {loadingData ? (
+                <p>Loading...</p>
+              ) : (
+                filteredSkills.map((skill) => (
+                  <label key={skill} className="flex gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedSkills.includes(skill)}
+                      onChange={() => toggleSkill(skill)}
+                    />
+                    {skill}
+                  </label>
+                ))
+              )}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {skills.map(skill => (
-              <label key={skill} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={selectedSkills.includes(skill)}
-                  onChange={() => toggleSkill(skill)}
-                />
-                {skill}
-              </label>
-            ))}
-          </div>
-        </div>
+          {/* QUALIFICATIONS */}
+          <div className="bg-slate-50 p-4 rounded-2xl">
+            <h3 className="font-semibold mb-3">Qualifications</h3>
 
-        {/* QUALIFICATIONS */}
-        <div className="mb-6">
-          <h3 className="font-semibold mb-2">Qualifications</h3>
+            {/* ADD NEW QUALIFICATION */}
+            <div className="flex gap-2 mb-3">
+              <input
+                value={newQualification}
+                onChange={(e) => setNewQualification(e.target.value)}
+                className="bg-white rounded-xl p-2 w-full"
+                placeholder="Add qualification"
+              />
+              <button
+                type="button"
+                onClick={addQualification}
+                className="bg-cyan-600 text-white px-4 rounded-xl"
+              >
+                Add
+              </button>
+            </div>
 
-          <div className="flex gap-2 mb-2">
             <input
-              value={newQualification}
-              onChange={(e) => setNewQualification(e.target.value)}
-              className="border px-3 py-2 rounded-xl w-full"
-              placeholder="Add qualification"
+              value={qualSearch}
+              onChange={(e) => setQualSearch(e.target.value)}
+              className="w-full p-2 bg-white rounded-xl mb-3"
+              placeholder="Search qualifications"
             />
-            <button onClick={addQualification} className="bg-cyan-600 text-white px-4 rounded-xl">
-              Add
-            </button>
-          </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {qualifications.map(q => (
-              <label key={q} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={selectedQualifications.includes(q)}
-                  onChange={() => toggleQualification(q)}
-                />
-                {q}
-              </label>
-            ))}
+            <div className="grid grid-cols-2 gap-2">
+              {loadingData ? (
+                <p>Loading...</p>
+              ) : (
+                filteredQualifications.map((q) => (
+                  <label key={q} className="flex gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedQualifications.includes(q)}
+                      onChange={() => toggleQualification(q)}
+                    />
+                    {q}
+                  </label>
+                ))
+              )}
+            </div>
           </div>
         </div>
 
-        {/* ACTIONS */}
-        <div className="flex justify-end gap-3">
+        {/* FOOTER */}
+        <div className="p-5 flex justify-end gap-3">
           <button
-            onClick={handleClose}
-            className="px-4 py-2 border rounded-xl"
+            onClick={onClose}
+            className="px-4 py-2 bg-slate-100 rounded-xl"
           >
             Cancel
           </button>
@@ -307,7 +344,6 @@ export default function UploadFilterModal({
             {loading ? "Uploading..." : "Filter & Upload"}
           </button>
         </div>
-
       </div>
     </div>
   );

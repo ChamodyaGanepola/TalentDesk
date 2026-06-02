@@ -32,6 +32,12 @@ def export_batch_shortlisted(batch_id: str):
     ])
 
     for index, candidate in enumerate(candidates, start=1):
+        exp = candidate.get("experience_years", 0)
+
+        try:
+          exp = float(exp)
+        except:
+          exp = 0
 
         ws.append([
             index,
@@ -40,7 +46,7 @@ def export_batch_shortlisted(batch_id: str):
             candidate.get("email", ""),
             candidate.get("contact_no", ""),
             ", ".join(candidate.get("skills", [])),
-            candidate.get("experience_years", 0),
+            exp,
             ", ".join(candidate.get("qualifications", []))
         ])
 
