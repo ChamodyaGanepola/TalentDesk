@@ -40,13 +40,13 @@ RULES (VERY IMPORTANT)
 ========================
 
 1. SKILLS:
-- Extract ALL technical skills from anywhere in CV
+- Extract ALL technical skills(don't extract soft skills) from anywhere in CV
 - Include skills from:
   - internships
   - work experience
   - technical summaries
   - project descriptions (ONLY for skills, NOT experience)
-- Normalize skills to lowercase
+  -or anywhere in the CV
 - Remove duplicates
 
 2. EXPERIENCE RULE:

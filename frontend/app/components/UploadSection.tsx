@@ -111,7 +111,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
           }}
           onProcessingStart={() => {
             setOpenModal(false);
-            setStatus("processing"); // ✅ NOW correct place
+            setStatus("processing"); 
           }}
         />
       )}

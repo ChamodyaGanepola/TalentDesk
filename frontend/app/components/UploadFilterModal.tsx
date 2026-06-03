@@ -159,7 +159,7 @@ export default function UploadFilterModal({
           : `Uploaded ${data.uploaded} files successfully`
       );
 
-      // ✅ FIX: correct place to trigger processing
+      // to trigger processing
       if (data.batch_id) {
         onProcessingStart(data.batch_id);
       }

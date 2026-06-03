@@ -110,7 +110,7 @@ def process_jobs():
             # =====================================
             # CHOOSE ENGINE
             # =====================================
-            if len(content) < 20000:
+            if len(content) < 2000:
 
                 print("🧠 Using VISION OCR (PDF → Image → GPT-4o)")
                 method = "openai_vision_ocr"
