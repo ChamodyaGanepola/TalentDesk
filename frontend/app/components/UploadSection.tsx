@@ -6,6 +6,7 @@ import UploadFilterModal from "@/app/components/UploadFilterModal";
 import { useRouter } from "next/navigation";
 
 export default function UploadSection({ onUploadSuccess }: any) {
+
   const [openModal, setOpenModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
 
@@ -16,17 +17,15 @@ export default function UploadSection({ onUploadSuccess }: any) {
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
 
-  const resetStatusAfterDelay = () => {
-    setTimeout(() => {
-      setStatus(null);
-    }, 3000);
-  };
-
   const onUploadSuccessRef = useRef(onUploadSuccess);
 
   useEffect(() => {
     onUploadSuccessRef.current = onUploadSuccess;
   }, [onUploadSuccess]);
+
+  const resetStatusAfterDelay = () => {
+    setTimeout(() => setStatus(null), 3000);
+  };
 
   useEffect(() => {
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
@@ -35,23 +34,32 @@ export default function UploadSection({ onUploadSuccess }: any) {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
+      // 🔥 REAL-TIME CV UPDATE (NEW)
+      if (data.event === "cv_processed") {
+        setStatus("processing");
+        return;
+      }
+
+      // batch no results
       if (data.event === "batch_completed_no_results") {
         setStatus("rejected");
         onUploadSuccessRef.current?.();
         resetStatusAfterDelay();
       }
 
+      // batch completed
       if (data.event === "batch_completed") {
         setStatus("completed");
         onUploadSuccessRef.current?.();
         resetStatusAfterDelay();
       }
 
+      // excel ready → navigate
       if (data.event === "excel_exported") {
         setStatus("completed");
 
         setTimeout(() => {
-          router.push("/resume-viewer");
+          router.push(`/resume-viewer?batch=${data.batch_id}`);
         }, 800);
       }
     };
@@ -64,6 +72,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
 
   return (
     <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed text-center">
+
       <div className="flex justify-center mb-5">
         <div className="w-20 h-20 rounded-full bg-cyan-100 flex items-center justify-center">
           <UploadCloud size={40} className="text-cyan-600" />
@@ -87,7 +96,6 @@ export default function UploadSection({ onUploadSuccess }: any) {
           filesArray.forEach((f) => dt.items.add(f));
 
           setSelectedFiles(dt.files);
-
           setOpenModal(true);
 
           e.target.value = "";
@@ -101,7 +109,6 @@ export default function UploadSection({ onUploadSuccess }: any) {
         Upload CV Files
       </label>
 
-      {/* MODAL */}
       {openModal && selectedFiles && (
         <UploadFilterModal
           files={selectedFiles}
@@ -111,7 +118,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
           }}
           onProcessingStart={() => {
             setOpenModal(false);
-            setStatus("processing"); 
+            setStatus("processing");
           }}
         />
       )}

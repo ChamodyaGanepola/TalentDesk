@@ -46,7 +46,8 @@ RULES (VERY IMPORTANT)
   - work experience
   - technical summaries
   - project descriptions (ONLY for skills, NOT experience)
-  -or anywhere in the CV
+  -or anywhere in the CV that indicates a technical skill
+- Normalize to lowercase
 - Remove duplicates
 
 2. EXPERIENCE RULE:

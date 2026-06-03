@@ -9,7 +9,7 @@ from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
 from app.services.export_service import export_batch_shortlisted
 from app.ws.manager import manager
-from app.services.qualification_ai import normalize_and_match_qualifications
+
 import fitz
 import re
 
@@ -75,61 +75,12 @@ def load_batch_requirements(db, batch_id: str):
     skills = [r[0] for r in skills_rows] if skills_rows else []
     qualifications = [r[0] for r in quals_rows] if quals_rows else []
 
-    experience_type = exp_row[0] if exp_row else "minimum"
-    experience_value = exp_row[1] if exp_row else 0
-
     return {
         "skills": skills,
         "qualifications": qualifications,
-        "experience_type": experience_type,
-        "experience_value": experience_value
+        "experience_type": exp_row[0] if exp_row else "minimum",
+        "experience_value": exp_row[1] if exp_row else 0
     }
-
-
-def check_experience(cv_exp, req_type, req_value):
-    cv_exp = float(cv_exp or 0)
-    req_value = float(req_value or 0)
-
-    if req_type == "minimum":
-        return cv_exp >= req_value
-    if req_type == "more_than":
-        return cv_exp > req_value
-    if req_type == "exact":
-        return abs(cv_exp - req_value) < 0.01
-
-    return True
-
-
-def evaluate_qualifications(cv_quals, required_quals):
-    if not required_quals:
-        return True
-
-    cv_set = set([q.lower() for q in cv_quals or []])
-    req_set = set([q.lower() for q in required_quals])
-
-    return req_set.issubset(cv_set)
-
-
-# SAFE WRAPPER FOR OPENAI RESULT
-def safe_qualification_match(cv_quals, required_quals):
-    try:
-        result = normalize_and_match_qualifications(cv_quals, required_quals)
-
-        # FIX: if function returns bool accidentally
-        if isinstance(result, bool):
-            return {"match": result, "reason": ""}
-
-        if isinstance(result, dict):
-            return {
-                "match": result.get("match", False),
-                "reason": result.get("reason", "")
-            }
-
-        return {"match": False, "reason": "invalid_response"}
-
-    except Exception as e:
-        print("Qualification AI Error:", e)
-        return {"match": False, "reason": "error"}
 
 
 # =========================
@@ -170,10 +121,11 @@ async def cv_worker_loop():
             # LOAD REQUIREMENTS
             # =========================
             req = load_batch_requirements(db, batch_id)
+
             required_skills = req["skills"]
             required_quals = req["qualifications"]
-            required_exp = req["experience_value"]
             exp_type = req["experience_type"]
+            required_exp = req["experience_value"]
 
             # =========================
             # READ CV
@@ -196,30 +148,34 @@ async def cv_worker_loop():
             print("Extracted Qualifications:", cv_quals)
 
             # =========================
-            # MATCHING
+            # MATCHING (LINKEDIN-LEVEL)
             # =========================
-            skills_match = True if not required_skills else all(
-                s.lower() in [cs.lower() for cs in cv_skills]
-                for s in required_skills
+            result = evaluate_candidate(
+                cv={
+                    "skills": cv_skills,
+                    "qualifications": cv_quals,
+                    "experience_years": cv_exp,
+                },
+                required_skills=required_skills,
+                required_quals=required_quals,
+                exp_type=exp_type,
+                exp_value=required_exp
             )
 
-            # =========================
-            # QUALIFICATIONS MATCH (FIXED)
-            # =========================
-            quals_match_result = safe_qualification_match(cv_quals, required_quals)
-            quals_match = quals_match_result.get("match", False)
-            reason = quals_match_result.get("reason", "")
+            skills_match = result["skills_ok"]
+            quals_match = result["qual_ok"]
+            exp_match = result["exp_ok"]
+            final = result["match"]
 
-            print(f"Qualifications Match: {quals_match} | Reason: {reason}")
-
-            exp_match = check_experience(cv_exp, exp_type, required_exp)
-
-            print(f"Skills Match: {skills_match} | Qualifications Match: {quals_match} | Experience Match: {exp_match}")
-
-            final = skills_match and quals_match and exp_match
             status = "Shortlisted" if final else "Rejected"
 
-            print("🏷 Final Status:", status)
+            print("\n======================")
+            print("RESULT")
+            print("Skills:", skills_match)
+            print("Qualifications:", quals_match)
+            print("Experience:", exp_match)
+            print("FINAL STATUS:", status)
+            print("======================\n")
 
             # =========================
             # SAVE TO MONGO
@@ -252,8 +208,6 @@ async def cv_worker_loop():
             # =========================
             # EXPORT EXCEL (ONCE PER BATCH)
             # =========================
-            excel_path = None
-
             if batch_completed(db, batch_id):
 
                 print(f"Batch completed: {batch_id}")
@@ -262,6 +216,8 @@ async def cv_worker_loop():
                     SELECT id FROM batch_exports
                     WHERE batch_id=:batch_id
                 """), {"batch_id": batch_id}).fetchone()
+
+                excel_path = None
 
                 if not existing:
                     excel_path = export_batch_shortlisted(batch_id)
@@ -276,25 +232,20 @@ async def cv_worker_loop():
                         })
                         db.commit()
 
-                shortlisted_count = db.execute(text("""
-                    SELECT COUNT(*)
-                    FROM uploads
-                    WHERE batch_id=:batch_id
-                    AND status='Shortlisted'
-                """), {"batch_id": batch_id}).scalar()
+                # =========================
+                # 🔥 NEW: FINAL EVENT (cv_proceed)
+                # =========================
+                await manager.broadcast({
+                    "event": "cv_proceed",
+                    "batch_id": batch_id,
+                    "message": "All CVs processed successfully"
+                })
 
-                if shortlisted_count == 0:
-                    await manager.broadcast({
-                        "event": "batch_completed_no_results",
-                        "batch_id": batch_id,
-                        "message": "All CVs were rejected"
-                    })
-                else:
-                    await manager.broadcast({
-                        "event": "batch_completed",
-                        "batch_id": batch_id,
-                        "message": "Batch processing completed"
-                    })
+                # optional extra events (kept your flow intact)
+                await manager.broadcast({
+                    "event": "batch_completed",
+                    "batch_id": batch_id
+                })
 
                 if excel_path:
                     await manager.broadcast({
