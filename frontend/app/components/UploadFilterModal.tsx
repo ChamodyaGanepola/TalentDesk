@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -70,7 +71,6 @@ export default function UploadFilterModal({
     load();
   }, []);
 
-  // ================= TOGGLE SKILL / QUALIFICATION =================
   const toggleSkill = (skill: string) => {
     setSelectedSkills((prev) =>
       prev.includes(skill) ? prev.filter((s) => s !== skill) : [...prev, skill]
@@ -83,7 +83,6 @@ export default function UploadFilterModal({
     );
   };
 
-  // ================= ADD NEW SKILL / QUALIFICATION =================
   const addSkill = async () => {
     const trimmed = newSkill.trim();
     if (!trimmed) return;
@@ -120,9 +119,6 @@ export default function UploadFilterModal({
     setNewQualification("");
   };
 
-
-
-
   // ================= UPLOAD =================
   const handleUpload = async () => {
     if (loading) return;
@@ -150,6 +146,7 @@ export default function UploadFilterModal({
       if (!data.success && data.uploaded === 0) {
         setSuccess(false);
         setMessage("Upload failed");
+        setLoading(false);
         return;
       }
 
@@ -158,21 +155,25 @@ export default function UploadFilterModal({
       setMessage(
         data.failed_files?.length
           ? `Uploaded ${data.uploaded} files\nSome failed:\n` +
-          data.failed_files
-            .map((f: any) => `${f.file} → ${f.error}`)
-            .join("\n")
+            data.failed_files.map((f: any) => `${f.file} → ${f.error}`).join("\n")
           : `Uploaded ${data.uploaded} files successfully`
       );
 
-      onProcessingStart(data.batch_id);
+      // ✅ FIX: correct place to trigger processing
+      if (data.batch_id) {
+        onProcessingStart(data.batch_id);
+      }
+
       if (data.uploaded === 0 && data.failed_files?.length) {
         setSuccess(false);
         setMessage("No files uploaded");
         return;
       }
+
       setTimeout(() => {
         onClose();
       }, 1200);
+
     } catch {
       setSuccess(false);
       setMessage("Server error");
@@ -180,6 +181,7 @@ export default function UploadFilterModal({
       setLoading(false);
     }
   };
+
 
   const filteredSkills = skills.filter((s) =>
     s.toLowerCase().includes(skillSearch.toLowerCase())

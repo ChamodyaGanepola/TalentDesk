@@ -16,12 +16,17 @@ export default function UploadSection({ onUploadSuccess }: any) {
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
 
-  // RESET helper
   const resetStatusAfterDelay = () => {
     setTimeout(() => {
       setStatus(null);
     }, 3000);
   };
+
+  const onUploadSuccessRef = useRef(onUploadSuccess);
+
+  useEffect(() => {
+    onUploadSuccessRef.current = onUploadSuccess;
+  }, [onUploadSuccess]);
 
   useEffect(() => {
     const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
@@ -30,23 +35,18 @@ export default function UploadSection({ onUploadSuccess }: any) {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      console.log("WS EVENT:", data);
-
-      // ❌ all rejected
       if (data.event === "batch_completed_no_results") {
         setStatus("rejected");
-        onUploadSuccess?.();
+        onUploadSuccessRef.current?.();
         resetStatusAfterDelay();
       }
 
-      // ✅ batch completed
       if (data.event === "batch_completed") {
         setStatus("completed");
-        onUploadSuccess?.();
+        onUploadSuccessRef.current?.();
         resetStatusAfterDelay();
       }
 
-      // 📦 excel exported → redirect
       if (data.event === "excel_exported") {
         setStatus("completed");
 
@@ -56,12 +56,14 @@ export default function UploadSection({ onUploadSuccess }: any) {
       }
     };
 
-    return () => ws.close();
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
   }, []);
 
   return (
     <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed text-center">
-      {/* ICON */}
       <div className="flex justify-center mb-5">
         <div className="w-20 h-20 rounded-full bg-cyan-100 flex items-center justify-center">
           <UploadCloud size={40} className="text-cyan-600" />
@@ -78,9 +80,17 @@ export default function UploadSection({ onUploadSuccess }: any) {
         accept=".pdf,.doc,.docx"
         onChange={(e) => {
           if (!e.target.files) return;
-          setSelectedFiles(e.target.files);
+
+          const filesArray = Array.from(e.target.files);
+
+          const dt = new DataTransfer();
+          filesArray.forEach((f) => dt.items.add(f));
+
+          setSelectedFiles(dt.files);
+
           setOpenModal(true);
-          setStatus("processing"); // IMPORTANT FIX
+
+          e.target.value = "";
         }}
       />
 
@@ -95,15 +105,17 @@ export default function UploadSection({ onUploadSuccess }: any) {
       {openModal && selectedFiles && (
         <UploadFilterModal
           files={selectedFiles}
-          onClose={() => setOpenModal(false)}
+          onClose={() => {
+            setOpenModal(false);
+            setSelectedFiles(null);
+          }}
           onProcessingStart={() => {
             setOpenModal(false);
-            setStatus("processing");
+            setStatus("processing"); // ✅ NOW correct place
           }}
         />
       )}
 
-      {/* STATUS */}
       {status === "processing" && (
         <p className="mt-5 text-cyan-600 font-medium animate-pulse">
           Processing CVs...
