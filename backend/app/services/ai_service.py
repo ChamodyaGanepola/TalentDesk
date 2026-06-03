@@ -1,7 +1,7 @@
 import os
 import json
 from openai import OpenAI
-from app.services.utils_experience import calculate_experience  # ✅ import the common function
+from app.services.utils_experience import calculate_experience  
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -51,8 +51,13 @@ RULES (VERY IMPORTANT)
 - Remove duplicates
 
 2. EXPERIENCE RULE:
-- ONLY internships + paid jobs
-- DO NOT include projects or academic work
+-If directly mentioned experience in years, use that (but only if it explicitly states it's from internships/jobs)
+- If not directly mentioned, calculate experience by summing durations of ALL internships and paid jobs (DO NOT count projects or academic work)
+- Convert durations to years:
+  3 months = 0.25 years
+  6 months = 0.5 years
+  1 year = 1.0 years
+  1.5 years = 1.5 years
 
 3. INTERNSHIPS FORMAT:
 [

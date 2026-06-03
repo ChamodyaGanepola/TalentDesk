@@ -39,8 +39,6 @@ async def startup():
 
 # WebSocket
 
-
-
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
     await manager.connect(websocket)

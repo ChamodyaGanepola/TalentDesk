@@ -42,7 +42,7 @@ def safe_json_load(text: str):
         return json.loads(text)
 
     except Exception as e:
-        print("❌ JSON parse error:", e)
+        print(" JSON parse error:", e)
         print("RAW:", text)
         return None
 

@@ -16,7 +16,7 @@ import re
 
 # =========================
 # HELPERS
-# =========================
+
 
 def parse_experience(value):
     if not value:
@@ -131,8 +131,8 @@ async def cv_worker_loop():
             # READ CV
             # =========================
             raw_text = read_file(file_url)
-
-            if len(raw_text) < 2000:
+            print("Raw text length:", len(raw_text))
+            if len(raw_text) < 1500:
                 extracted = vision_ocr(file_url)
                 method = "vision_ocr"
             else:
@@ -233,7 +233,7 @@ async def cv_worker_loop():
                         db.commit()
 
                 # =========================
-                # 🔥 NEW: FINAL EVENT (cv_proceed)
+                # FINAL EVENT (cv_proceed)
                 # =========================
                 await manager.broadcast({
                     "event": "cv_proceed",
