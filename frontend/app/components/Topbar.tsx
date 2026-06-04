@@ -14,7 +14,7 @@ export default function Topbar() {
  {/* WS Connection for Notifications */}
  {/*
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8000/ws/dashboard");
+    const ws = new WebSocket("ws://localhost:upload/recent/ws/dashboard");
   
     ws.onopen = () => console.log("WS Connected");
 
