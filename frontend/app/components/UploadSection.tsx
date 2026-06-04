@@ -9,7 +9,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
 
   const [openModal, setOpenModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
-
+  const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
   const [status, setStatus] = useState<
     null | "processing" | "rejected" | "completed"
   >(null);
@@ -28,7 +28,7 @@ export default function UploadSection({ onUploadSuccess }: any) {
   };
 
   useEffect(() => {
-    const ws = new WebSocket("ws://127.0.0.1:8000/ws/dashboard");
+    const ws = new WebSocket(`${WS_URL}/ws/dashboard`);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {

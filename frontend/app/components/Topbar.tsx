@@ -11,10 +11,11 @@ export default function Topbar() {
   const [open, setOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // WebSocket connection
+ {/* WS Connection for Notifications */}
+ {/*
   useEffect(() => {
     const ws = new WebSocket("ws://localhost:8000/ws/dashboard");
-
+  
     ws.onopen = () => console.log("WS Connected");
 
     ws.onmessage = (event) => {
@@ -42,7 +43,7 @@ export default function Topbar() {
       setUnreadCount(0); // mark all as read
     }
   }, [open]);
-
+*/}
   return (
     <div className="relative bg-white rounded-2xl shadow-sm p-4 flex items-center justify-between mb-8">
       {/* Left */}
