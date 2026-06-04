@@ -62,7 +62,7 @@ export default function ResumeViewerPage() {
         <Topbar />
 
         {/* FILTER */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-6 text-black">
           <input
             type="date"
             value={filterDate}
@@ -94,7 +94,7 @@ export default function ResumeViewerPage() {
               >
                 <div>
                   <h2 className="font-semibold text-lg">
-                    Batch: {file.batch_id}
+                    {file.created_at ? file.created_at.replace("T", " ") : ""}
                   </h2>
 
                   <p className="text-sm text-gray-500">
@@ -102,7 +102,7 @@ export default function ResumeViewerPage() {
                   </p>
 
                   <p className="text-xs text-gray-400">
-                    {file.created_at}
+                     Batch: {file.batch_id}
                   </p>
                 </div>
 

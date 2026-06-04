@@ -75,16 +75,16 @@ def skill_match(cv_skills, required_skills, fuzzy_threshold=0.8, semantic_thresh
 
     for req_skill in required_skills_normalized:
 
-        # 1️⃣ Canonical exact match (if exists)
+        # 1. Canonical exact match (if exists)
         if req_skill in cv_skills_normalized:
             continue
 
-        # 2️⃣ Fuzzy match
+        # 2️ Fuzzy match
         fuzzy_matches = get_close_matches(req_skill, cv_skills_normalized, n=1, cutoff=fuzzy_threshold)
         if fuzzy_matches:
             continue
 
-        # 3️⃣ Semantic vector match
+        # 3. Semantic vector match
         req_vec = get_embedding(req_skill)
         semantic_found = False
         for cv_skill in cv_skills_normalized:
@@ -95,7 +95,7 @@ def skill_match(cv_skills, required_skills, fuzzy_threshold=0.8, semantic_thresh
         if semantic_found:
             continue
 
-        # 4️⃣ Substring / keyword fallback
+        # 4. Substring / keyword fallback
         substring_found = any(req_skill in cv_skill or cv_skill in req_skill for cv_skill in cv_skills_normalized)
         if substring_found:
             continue

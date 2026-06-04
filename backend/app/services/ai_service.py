@@ -40,7 +40,9 @@ RULES (VERY IMPORTANT)
 ========================
 
 1. SKILLS:
-- Extract ALL technical skills(don't extract soft skills) from anywhere in CV
+- Extract ALL technical skills(don't extract soft skills) from anywhere in CV.
+Include all programming languages, frameworks, libraries, tools, and platforms mentioned in the CV.
+Do not exclude any front-end or back-end frameworks, even if they appear in long lists or under "Web Development" sections.
 - Include skills from:
   - internships
   - work experience
