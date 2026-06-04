@@ -25,8 +25,6 @@ function UploadSkeleton() {
 }
 
 export default function DashboardPage() {
-  const API = process.env.NEXT_PUBLIC_API_URL;
-  const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
 
   const router = useRouter();
 
@@ -55,7 +53,12 @@ export default function DashboardPage() {
 
     try {
       const res = await fetch(
-        `${API}/upload/recent?page=${pageNumber}&per_page=${perPage}`
+        `${process.env.NEXT_PUBLIC_API_URL}/upload/recent?page=${pageNumber}&per_page=${perPage}`,
+        {
+          headers: {
+            "ngrok-skip-browser-warning": "true",
+          },
+        }
       );
 
       const result = await res.json();
@@ -76,9 +79,21 @@ export default function DashboardPage() {
   const refreshDashboard = async () => {
     try {
       const [totalRes, pendingRes, shortlistedRes] = await Promise.all([
-        fetch(`${API}/upload/stats/total`),
-        fetch(`${API}/upload/stats/pending`),
-        fetch(`${API}/upload/stats/shortlisted`),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/stats/total`, {
+          headers: {
+            "ngrok-skip-browser-warning": "true"
+          }
+        }),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/stats/pending`, {
+          headers: {
+            "ngrok-skip-browser-warning": "true"
+          }
+        }),
+        fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/stats/shortlisted`, {
+          headers: {
+            "ngrok-skip-browser-warning": "true"
+          }
+        }),
       ]);
 
       const total = await totalRes.json();
@@ -109,7 +124,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (wsRef.current) return;
 
-    const ws = new WebSocket(`${WS_URL}/ws/dashboard`);
+    const ws = new WebSocket(`${process.env.NEXT_PUBLIC_WS_URL}/ws/dashboard`);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
@@ -156,7 +171,7 @@ export default function DashboardPage() {
       ws.close();
       wsRef.current = null;
     };
-  }, [WS_URL]);
+  }, [process.env.NEXT_PUBLIC_WS_URL]);
 
   // =========================
   // RENDER
@@ -188,7 +203,7 @@ export default function DashboardPage() {
               >
                 <div>
                   <a
-                    href={`${API}/uploads/${file.file_url.split(/[\\/]/).pop()}`}
+                    href={`${process.env.NEXT_PUBLIC_API_URL}/uploads/${file.file_url.split(/[\\/]/).pop()}`}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -222,9 +237,8 @@ export default function DashboardPage() {
             <button
               key={p}
               onClick={() => fetchRecentUploads(p)}
-              className={`px-3 py-2 rounded ${
-                p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
-              }`}
+              className={`px-3 py-2 rounded ${p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
+                }`}
             >
               {p}
             </button>

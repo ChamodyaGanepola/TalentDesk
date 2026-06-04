@@ -34,7 +34,11 @@ export default function ResumeViewerPage() {
         url += `&date=${filterDate}`;
       }
 
-      const res = await fetch(url);
+      const res = await fetch(url, {
+  headers: {
+    "ngrok-skip-browser-warning": "true"
+  }
+});
       const data = await res.json();
 
       setFiles(data.data || []);
@@ -110,7 +114,11 @@ export default function ResumeViewerPage() {
                   className="text-cyan-600 font-medium"
                   onClick={async () => {
                     try {
-                      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${file.file}`);
+                      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/${file.file}`, {
+  headers: {
+    "ngrok-skip-browser-warning": "true"
+  }
+});
                       const blob = await res.blob();
                       const url = window.URL.createObjectURL(blob);
 

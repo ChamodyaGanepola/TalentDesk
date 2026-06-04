@@ -53,8 +53,16 @@ export default function UploadFilterModal({
       }
 
       const [s, q] = await Promise.all([
-        fetch(`${API}/skills`),
-        fetch(`${API}/qualifications`),
+        fetch(`${API}/skills`, {
+          headers: {
+            "ngrok-skip-browser-warning": "true"
+          }
+        }),
+        fetch(`${API}/qualifications`, {
+          headers: {
+            "ngrok-skip-browser-warning": "true"
+          }
+        }),
       ]);
 
       const sd = await s.json();
@@ -89,7 +97,7 @@ export default function UploadFilterModal({
 
     const res = await fetch(`${API}/skills/add`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true", },
       body: JSON.stringify({ name: trimmed }),
     });
 
@@ -107,7 +115,7 @@ export default function UploadFilterModal({
 
     const res = await fetch(`${API}/qualifications/add`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true", },
       body: JSON.stringify({ name: trimmed }),
     });
 
@@ -138,6 +146,9 @@ export default function UploadFilterModal({
     try {
       const res = await fetch(`${API}/upload/cvs`, {
         method: "POST",
+        headers: {
+          "ngrok-skip-browser-warning": "true",
+        },
         body: formData,
       });
 
@@ -155,7 +166,7 @@ export default function UploadFilterModal({
       setMessage(
         data.failed_files?.length
           ? `Uploaded ${data.uploaded} files\nSome failed:\n` +
-            data.failed_files.map((f: any) => `${f.file} → ${f.error}`).join("\n")
+          data.failed_files.map((f: any) => `${f.file} → ${f.error}`).join("\n")
           : `Uploaded ${data.uploaded} files successfully`
       );
 

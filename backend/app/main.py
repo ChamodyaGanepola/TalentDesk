@@ -8,40 +8,41 @@ from app.routes.auth import router as auth_router
 from app.routes.upload import router as upload_router
 from app.ws.manager import manager
 from app.core.cv_worker import cv_worker_loop
-
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 
 # =========================
-# CORS CONFIG (FIXED)
+# CORS (FINAL CLEAN FIX)
 # =========================
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://machine-thieving-rural.ngrok-free.dev",
         "https://talent-desk-inky.vercel.app",
     ],
-    allow_credentials=False,  # must be False when using "*" or wildcard patterns
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =========================
-# STATIC FILES
+# Static Files
 # =========================
 app.mount("/exports", StaticFiles(directory="exports"), name="exports")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
-
 # =========================
-# ROUTES
+# Routes
 # =========================
 app.include_router(auth_router)
 app.include_router(upload_router)
 
 # =========================
-# STARTUP WORKER
+# Startup Worker
 # =========================
 @app.on_event("startup")
 async def startup():
@@ -49,7 +50,7 @@ async def startup():
     print("CV worker started")
 
 # =========================
-# WEBSOCKET
+# WebSocket
 # =========================
 @app.websocket("/ws/dashboard")
 async def dashboard_ws(websocket: WebSocket):
@@ -57,6 +58,6 @@ async def dashboard_ws(websocket: WebSocket):
 
     try:
         while True:
-            await websocket.receive_text()  # keep alive
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
