@@ -19,7 +19,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://talent-desk-inky.vercel.app/",
+        "https://talent-desk-inky.vercel.app",
     ],
     allow_credentials=False,  # must be False when using "*" or wildcard patterns
     allow_methods=["*"],
