@@ -184,6 +184,7 @@ async def cv_worker_loop():
                 "batch_id": batch_id,
                 "name": extracted.get("name"),
                 "email": extracted.get("email"),
+                "contact_no": extracted.get("contact_no"),
                 "skills": list(cv_skills),
                 "qualifications": list(cv_quals),
                 "experience_raw": extracted.get("experience_years"),

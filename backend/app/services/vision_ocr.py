@@ -76,6 +76,12 @@ def vision_ocr(file_path: str):
 You are a professional CV extraction engine for recruitment screening.
 
 Extract FULL CV information from ALL pages.
+CONTACT NUMBER:
+- Extract the primary phone/mobile number exactly as written.
+- Include country code if present.
+- Do NOT modify formatting.
+- If multiple numbers exist, return the candidate's primary contact number.
+- Return as a string.
 
 Return ONLY valid JSON:
 

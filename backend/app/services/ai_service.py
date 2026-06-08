@@ -88,13 +88,24 @@ Do not exclude any front-end or back-end frameworks, even if they appear in long
 - NEVER round experience_years
 - ALWAYS return valid JSON only
 - NO markdown, NO explanation
+
+CONTACT NUMBER:
+- Extract the primary phone/mobile number exactly as written.
+- Include country code if present.
+- Do NOT modify formatting.
+- If multiple numbers exist, return the candidate's primary contact number.
+- Return as a string.
 """
             },
             {"role": "user", "content": text}
         ]
     )
+    print("===== GPT RAW RESPONSE =====")
+    print(response.choices[0].message.content)
+    print("============================")
 
     try:
+      
         # parse GPT JSON
         extracted = json.loads(response.choices[0].message.content)
 
