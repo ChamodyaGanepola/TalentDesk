@@ -502,3 +502,25 @@ def get_excels(
         "page": page,
         "per_page": per_page
     }
+    
+@router.get("/upload/stats/all")
+def all_stats(db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN status='Uploaded' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status='Processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN status='Shortlisted' THEN 1 ELSE 0 END) AS shortlisted,
+            SUM(CASE WHEN status='Rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN status='Failed' THEN 1 ELSE 0 END) AS failed
+        FROM uploads
+    """)).mappings().first()
+
+    return {
+        "total": row["total"] or 0,
+        "pending": row["pending"] or 0,
+        "processing": row["processing"] or 0,
+        "shortlisted": row["shortlisted"] or 0,
+        "rejected": row["rejected"] or 0,
+        "failed": row["failed"] or 0,
+    }

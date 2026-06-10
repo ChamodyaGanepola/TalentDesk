@@ -184,27 +184,22 @@ export default function DashboardPage() {
   );
 
   const refreshDashboard = useCallback(async () => {
-    try {
-      const [totalRes, pendingRes, shortlistedRes] = await Promise.all([
-        fetch(`${API}/upload/stats/total`, { headers }),
-        fetch(`${API}/upload/stats/pending`, { headers }),
-        fetch(`${API}/upload/stats/shortlisted`, { headers }),
-      ]);
+  try {
+    const res = await fetch(`${API}/upload/stats/all`, { headers });
+    const data = await res.json();
 
-      const totalData = await totalRes.json();
-      const pendingData = await pendingRes.json();
-      const shortlistedData = await shortlistedRes.json();
-
-      setStats((prev) => ({
-        ...prev,
-        total: totalData.count || 0,
-        pending: pendingData.count || 0,
-        shortlisted: shortlistedData.count || 0,
-      }));
-    } catch (err) {
-      console.error("Stats refresh error:", err);
-    }
-  }, []);
+    setStats({
+      total: data.total || 0,
+      pending: data.pending || 0,
+      processing: data.processing || 0,
+      shortlisted: data.shortlisted || 0,
+      rejected: data.rejected || 0,
+      failed: data.failed || 0,
+    });
+  } catch (err) {
+    console.error("Stats refresh error:", err);
+  }
+}, []);
 
   const checkExcelAndRedirect = useCallback(
     async (batchId: string) => {

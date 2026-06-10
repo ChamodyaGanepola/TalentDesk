@@ -35,7 +35,7 @@ export default function LoginPage() {
 
       const data = await res.json();
 
-      // ❌ backend failed login
+      //  backend failed login
       if (!res.ok || !data.success) {
         alert(data.message || "Login failed");
         return;
