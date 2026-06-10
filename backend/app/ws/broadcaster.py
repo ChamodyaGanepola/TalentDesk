@@ -1,16 +1,9 @@
 from sqlalchemy import text
-
-from app.db_mysql import SessionLocal
-from app.ws.manager import manager
-
-
-from sqlalchemy import text
 from app.db_mysql import SessionLocal
 from app.ws.manager import manager
 
 
 async def broadcast_stats():
-
     db = SessionLocal()
 
     try:
@@ -22,8 +15,20 @@ async def broadcast_stats():
             SELECT COUNT(*) FROM uploads WHERE status='Uploaded'
         """)).fetchone()[0]
 
+        processing = db.execute(text("""
+            SELECT COUNT(*) FROM uploads WHERE status='Processing'
+        """)).fetchone()[0]
+
         shortlisted = db.execute(text("""
             SELECT COUNT(*) FROM uploads WHERE status='Shortlisted'
+        """)).fetchone()[0]
+
+        rejected = db.execute(text("""
+            SELECT COUNT(*) FROM uploads WHERE status='Rejected'
+        """)).fetchone()[0]
+
+        failed = db.execute(text("""
+            SELECT COUNT(*) FROM uploads WHERE status='Failed'
         """)).fetchone()[0]
 
     finally:
@@ -33,5 +38,8 @@ async def broadcast_stats():
         "event": "stats_update",
         "total": total,
         "pending": pending,
-        "shortlisted": shortlisted
+        "processing": processing,
+        "shortlisted": shortlisted,
+        "rejected": rejected,
+        "failed": failed
     })

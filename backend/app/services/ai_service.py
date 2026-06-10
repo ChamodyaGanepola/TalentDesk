@@ -1,26 +1,73 @@
 import os
 import json
+import re
 from openai import OpenAI
-from app.services.utils_experience import calculate_experience  
+from app.services.utils_experience import calculate_experience
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+def parse_float(value):
+    try:
+        return float(value or 0)
+    except Exception:
+        match = re.search(r"\d+(\.\d+)?", str(value))
+        return float(match.group()) if match else 0.0
+
+
+def clean_list(values, lowercase=False):
+    cleaned = []
+
+    for value in values or []:
+        if not value:
+            continue
+
+        item = str(value).strip()
+
+        if not item:
+            continue
+
+        if lowercase:
+            item = item.lower()
+
+        if item not in cleaned:
+            cleaned.append(item)
+
+    return cleaned
+
+
+def default_cv_result():
+    return {
+        "name": "",
+        "email": "",
+        "contact_no": "",
+        "skills": [],
+        "experience_years": 0.0,
+        "qualifications": [],
+        "profession": "",
+        "internships": []
+    }
+
+
 def extract_cv_text(text: str):
     """
-    Extract CV information using GPT and calculate experience precisely
-    counting only internships and paid jobs.
+    Extract CV information from text-based PDF content.
+    Experience is finally calculated in Python from internships/jobs.
     """
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "system",
-                "content": """
-You are a professional CV extraction engine for recruitment screening.
 
-Extract ALL information from the CV text accurately.
+    if not text or not text.strip():
+        return default_cv_result()
+
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_CV_MODEL", "gpt-4o-mini"),
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+You are a professional CV extraction engine for recruitment screening.
 
 Return JSON ONLY in this format:
 
@@ -35,105 +82,84 @@ Return JSON ONLY in this format:
   "internships": []
 }
 
-========================
-RULES (VERY IMPORTANT)
-========================
+RULES:
 
 1. SKILLS:
-- Extract ALL technical skills(don't extract soft skills) from anywhere in CV.
-Include all programming languages, frameworks, libraries, tools, and platforms mentioned in the CV.
-Do not exclude any front-end or back-end frameworks, even if they appear in long lists or under "Web Development" sections.
-- Include skills from:
-  - internships
-  - work experience
-  - technical summaries
-  - project descriptions (ONLY for skills, NOT experience)
-  -or anywhere in the CV that indicates a technical skill
-- Normalize to lowercase
-- Remove duplicates
+- Extract only technical skills.
+- Include programming languages, frameworks, libraries, tools, platforms, databases, cloud tools, and technical software.
+- Include skills from work, internships, projects, and technical summary sections.
+- Normalize skills to lowercase.
+- Remove duplicates.
 
-2. EXPERIENCE RULE:
--If directly mentioned experience in years, use that (but only if it explicitly states it's from internships/jobs)
-- If not directly mentioned, calculate experience by summing durations of ALL internships and paid jobs (DO NOT count projects or academic work)
-- Convert durations to years:
-  3 months = 0.25 years
-  6 months = 0.5 years
-  1 year = 1.0 years
-  1.5 years = 1.5 years
+2. EXPERIENCE:
+- Do not calculate final experience yourself.
+- Extract real internships and paid jobs only into the internships array.
+- Do not include projects, assignments, academic work, or hackathons as experience.
+- If a direct total experience is clearly written, place it in experience_years, but Python will recalculate using internships/jobs.
 
-3. INTERNSHIPS FORMAT:
+3. INTERNSHIPS/JOBS FORMAT:
 [
   {
-    "type": "internship/job",
+    "type": "internship" or "job",
     "company": "",
     "role": "",
     "start_date": "YYYY-MM or YYYY or Month YYYY",
-    "end_date": "YYYY-MM or present"
+    "end_date": "YYYY-MM or YYYY or Month YYYY or present"
   }
 ]
- IMPORTANT:
-- NEVER calculate experience here
-- NEVER round numbers
 
-3. QUALIFICATIONS:
-- Include all type of degrees, diplomas, certifications
-- Keep full official names
-
-
+4. QUALIFICATIONS:
+- Include degrees, diplomas, certificates, and professional qualifications.
+- Keep official names where possible.
 
 5. PROFESSION:
-- Extract current role or title if available
+- Extract current role/title if available.
 
-6. OUTPUT RULES:
-- NEVER round experience_years
-- ALWAYS return valid JSON only
-- NO markdown, NO explanation
-
-CONTACT NUMBER:
-- Extract the primary phone/mobile number exactly as written.
+6. CONTACT:
+- Extract primary phone/mobile number exactly as written.
 - Include country code if present.
-- Do NOT modify formatting.
-- If multiple numbers exist, return the candidate's primary contact number.
 - Return as a string.
+
+OUTPUT:
+- Valid JSON only.
+- No markdown.
+- No explanation.
 """
-            },
-            {"role": "user", "content": text}
-        ]
-    )
-    print("===== GPT RAW RESPONSE =====")
-    print(response.choices[0].message.content)
-    print("============================")
+                },
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ]
+        )
 
-    try:
-      
-        # parse GPT JSON
-        extracted = json.loads(response.choices[0].message.content)
+        raw_content = response.choices[0].message.content
 
-        # =========================
-        # Calculate total experience using utils_experience
-        # only internships/jobs counted
-        
-    # CALCULATE EXPERIENCE IN PYTHON (IMPORTANT FIX)
-        extracted["experience_years"] = calculate_experience(extracted.get("internships", []))
+        print("===== GPT RAW RESPONSE =====")
+        print(raw_content)
+        print("============================")
 
-        # cleanup skills & qualifications
-        extracted["skills"] = list(set([s.lower().strip() for s in extracted.get("skills", [])]))
-        extracted["qualifications"] = list(set(extracted.get("qualifications", [])))
-        
+        extracted = json.loads(raw_content)
 
-        return extracted
+        internships = extracted.get("internships", [])
+        calculated_exp = calculate_experience(internships)
 
-    except Exception as e:
-        print("JSON parse error:", e)
-        print(response.choices[0].message.content)
+        # If internships were not detected but CV has direct experience text,
+        # keep direct value as fallback.
+        direct_exp = parse_float(extracted.get("experience_years"))
+        final_exp = calculated_exp if calculated_exp > 0 else direct_exp
 
         return {
-            "name": "",
-            "email": "",
-            "contact_no": "",
-            "skills": [],
-            "experience_years": 0.0,
-            "qualifications": [],
-            "profession": "",
-            "internships": []
+            "name": str(extracted.get("name") or "").strip(),
+            "email": str(extracted.get("email") or "").strip(),
+            "contact_no": str(extracted.get("contact_no") or "").strip(),
+            "skills": clean_list(extracted.get("skills", []), lowercase=True),
+            "experience_years": final_exp,
+            "qualifications": clean_list(extracted.get("qualifications", []), lowercase=False),
+            "profession": str(extracted.get("profession") or "").strip(),
+            "internships": internships if isinstance(internships, list) else []
         }
+
+    except Exception as e:
+        print("CV extraction error:", e)
+        return default_cv_result()

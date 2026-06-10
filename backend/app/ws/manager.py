@@ -3,7 +3,6 @@ from fastapi import WebSocket
 
 
 class ConnectionManager:
-
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
@@ -16,19 +15,18 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        dead = []
+        dead_connections = []
 
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except:
-                dead.append(connection)
+            except Exception:
+                dead_connections.append(connection)
 
-        for d in dead:
-            self.disconnect(d)
+        for connection in dead_connections:
+            self.disconnect(connection)
 
     async def broadcast_new_export(self, batch_id: str, excel_file: str):
-        """Notify clients when a new Excel is exported"""
         await self.broadcast({
             "event": "excel_exported",
             "batch_id": batch_id,
@@ -36,5 +34,4 @@ class ConnectionManager:
         })
 
 
-# GLOBAL INSTANCE (use this everywhere)
 manager = ConnectionManager()

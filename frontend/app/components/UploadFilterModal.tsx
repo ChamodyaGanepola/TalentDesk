@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -9,16 +8,22 @@ type Props = {
   onProcessingStart: (batchId: string) => void;
 };
 
-let cachedSkills: string[] | null = null;
-let cachedQualifications: string[] | null = null;
+type FailedFile = {
+  file: string;
+  error: string;
+};
+
+const API = process.env.NEXT_PUBLIC_API_URL;
+
+const headers = {
+  "ngrok-skip-browser-warning": "true",
+};
 
 export default function UploadFilterModal({
   files,
   onClose,
   onProcessingStart,
 }: Props) {
-  const API = process.env.NEXT_PUBLIC_API_URL;
-
   const [skills, setSkills] = useState<string[]>([]);
   const [qualifications, setQualifications] = useState<string[]>([]);
 
@@ -31,207 +36,174 @@ export default function UploadFilterModal({
   const [experienceType, setExperienceType] = useState("minimum");
   const [experienceValue, setExperienceValue] = useState("1");
 
-  const [skillSearch, setSkillSearch] = useState("");
-  const [qualSearch, setQualSearch] = useState("");
-
   const [loading, setLoading] = useState(false);
-  const [loadingData, setLoadingData] = useState(true);
-
   const [message, setMessage] = useState("");
-  const [success, setSuccess] = useState(false);
 
-  // ================= LOAD MASTER DATA =================
+  const fileArray = Array.from(files);
+
   useEffect(() => {
-    const load = async () => {
-      setLoadingData(true);
+    fetchMasters();
+  }, []);
 
-      if (cachedSkills && cachedQualifications) {
-        setSkills(cachedSkills);
-        setQualifications(cachedQualifications);
-        setLoadingData(false);
-        return;
-      }
-
-      const [s, q] = await Promise.all([
-        fetch(`${API}/skills`, {
-          headers: {
-            "ngrok-skip-browser-warning": "true"
-          }
-        }),
-        fetch(`${API}/qualifications`, {
-          headers: {
-            "ngrok-skip-browser-warning": "true"
-          }
-        }),
+  const fetchMasters = async () => {
+    try {
+      const [skillsRes, qualificationsRes] = await Promise.all([
+        fetch(`${API}/skills`, { headers }),
+        fetch(`${API}/qualifications`, { headers }),
       ]);
 
-      const sd = await s.json();
-      const qd = await q.json();
+      const skillsData = await skillsRes.json();
+      const qualificationsData = await qualificationsRes.json();
 
-      cachedSkills = sd;
-      cachedQualifications = qd;
-
-      setSkills(sd);
-      setQualifications(qd);
-      setLoadingData(false);
-    };
-
-    load();
-  }, []);
+      setSkills(skillsData || []);
+      setQualifications(qualificationsData || []);
+    } catch (err) {
+      console.error(err);
+      setMessage("Failed to load skills or qualifications.");
+    }
+  };
 
   const toggleSkill = (skill: string) => {
     setSelectedSkills((prev) =>
-      prev.includes(skill) ? prev.filter((s) => s !== skill) : [...prev, skill]
+      prev.includes(skill)
+        ? prev.filter((s) => s !== skill)
+        : [...prev, skill]
     );
   };
 
-  const toggleQualification = (q: string) => {
+  const toggleQualification = (qualification: string) => {
     setSelectedQualifications((prev) =>
-      prev.includes(q) ? prev.filter((x) => x !== q) : [...prev, q]
+      prev.includes(qualification)
+        ? prev.filter((q) => q !== qualification)
+        : [...prev, qualification]
     );
   };
 
   const addSkill = async () => {
-    const trimmed = newSkill.trim();
-    if (!trimmed) return;
+    const name = newSkill.trim().toLowerCase();
 
-    const res = await fetch(`${API}/skills/add`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true", },
-      body: JSON.stringify({ name: trimmed }),
-    });
+    if (!name) return;
 
-    const data = await res.json();
-    if (!data.success) return;
+    try {
+      await fetch(`${API}/skills/add`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify({ name }),
+      });
 
-    setSkills((prev) => [...prev, trimmed]);
-    setSelectedSkills((prev) => [...prev, trimmed]);
-    setNewSkill("");
+      setSkills((prev) => (prev.includes(name) ? prev : [...prev, name]));
+      setSelectedSkills((prev) => (prev.includes(name) ? prev : [...prev, name]));
+      setNewSkill("");
+    } catch (err) {
+      console.error(err);
+      setMessage("Failed to add skill.");
+    }
   };
 
   const addQualification = async () => {
-    const trimmed = newQualification.trim();
-    if (!trimmed) return;
+    const name = newQualification.trim().toLowerCase();
 
-    const res = await fetch(`${API}/qualifications/add`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true", },
-      body: JSON.stringify({ name: trimmed }),
-    });
+    if (!name) return;
 
-    const data = await res.json();
-    if (!data.success) return;
+    try {
+      await fetch(`${API}/qualifications/add`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify({ name }),
+      });
 
-    setQualifications((prev) => [...prev, trimmed]);
-    setSelectedQualifications((prev) => [...prev, trimmed]);
-    setNewQualification("");
+      setQualifications((prev) => (prev.includes(name) ? prev : [...prev, name]));
+      setSelectedQualifications((prev) =>
+        prev.includes(name) ? prev : [...prev, name]
+      );
+      setNewQualification("");
+    } catch (err) {
+      console.error(err);
+      setMessage("Failed to add qualification.");
+    }
   };
 
-  // ================= UPLOAD =================
   const handleUpload = async () => {
-    if (loading) return;
-
     setLoading(true);
     setMessage("");
 
-    const formData = new FormData();
-
-    Array.from(files).forEach((f) => formData.append("files", f));
-
-    formData.append("skills", JSON.stringify(selectedSkills));
-    formData.append("qualifications", JSON.stringify(selectedQualifications));
-    formData.append("experience_type", experienceType);
-    formData.append("experience_value", experienceValue);
-
     try {
+      const formData = new FormData();
+
+      fileArray.forEach((file) => {
+        formData.append("files", file);
+      });
+
+      formData.append("skills", JSON.stringify(selectedSkills));
+      formData.append("qualifications", JSON.stringify(selectedQualifications));
+      formData.append("experience_type", experienceType);
+      formData.append("experience_value", experienceValue);
+
       const res = await fetch(`${API}/upload/cvs`, {
         method: "POST",
-        headers: {
-          "ngrok-skip-browser-warning": "true",
-        },
+        headers,
         body: formData,
       });
 
       const data = await res.json();
 
-      if (!data.success && data.uploaded === 0) {
-        setSuccess(false);
-        setMessage("Upload failed");
-        setLoading(false);
+      if (!res.ok || !data.success) {
+        const failedMessage =
+          data.failed_files
+            ?.map((f: FailedFile) => `${f.file}: ${f.error}`)
+            .join("\n") || data.message || "Upload failed.";
+
+        setMessage(failedMessage);
         return;
       }
 
-      setSuccess(true);
-
-      setMessage(
-        data.failed_files?.length
-          ? `Uploaded ${data.uploaded} files\nSome failed:\n` +
-          data.failed_files.map((f: any) => `${f.file} → ${f.error}`).join("\n")
-          : `Uploaded ${data.uploaded} files successfully`
-      );
-
-      // to trigger processing
       if (data.batch_id) {
         onProcessingStart(data.batch_id);
       }
 
-      if (data.uploaded === 0 && data.failed_files?.length) {
-        setSuccess(false);
-        setMessage("No files uploaded");
-        return;
-      }
-
-      setTimeout(() => {
-        onClose();
-      }, 1200);
-
-    } catch {
-      setSuccess(false);
-      setMessage("Server error");
+      onClose();
+    } catch (err) {
+      console.error(err);
+      setMessage("Server error while uploading.");
     } finally {
       setLoading(false);
     }
   };
 
-
-  const filteredSkills = skills.filter((s) =>
-    s.toLowerCase().includes(skillSearch.toLowerCase())
-  );
-
-  const filteredQualifications = qualifications.filter((q) =>
-    q.toLowerCase().includes(qualSearch.toLowerCase())
-  );
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
 
       <div className="relative bg-white w-full max-w-4xl rounded-3xl shadow-2xl z-10 overflow-hidden">
-        {/* HEADER */}
         <div className="p-6 bg-cyan-600 text-white">
-          <h2 className="text-xl font-bold">CV Filter Setup</h2>
+          <h2 className="text-xl font-bold">CV Screening Filters</h2>
 
+          <p className="text-sm text-cyan-50 mt-1">
+            {fileArray.length} PDF file(s) selected
+          </p>
+        </div>
+
+        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto text-slate-900">
           {message && (
-            <div
-              className={`mt-3 px-4 py-2 rounded-xl text-sm whitespace-pre-line ${success ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                }`}
-            >
+            <div className="bg-red-100 text-red-700 p-3 rounded-xl text-sm whitespace-pre-line">
               {message}
             </div>
           )}
-        </div>
 
-        {/* BODY */}
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
-          {/* EXPERIENCE */}
           <div className="bg-slate-50 p-4 rounded-2xl">
             <h3 className="font-semibold mb-3">Experience</h3>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <select
                 value={experienceType}
                 onChange={(e) => setExperienceType(e.target.value)}
-                className="bg-white p-2 rounded-xl"
+                className="bg-white p-2 rounded-xl border border-slate-200"
               >
                 <option value="minimum">Minimum</option>
                 <option value="more_than">More Than</option>
@@ -240,25 +212,27 @@ export default function UploadFilterModal({
 
               <input
                 type="number"
+                min="0"
+                step="0.1"
                 value={experienceValue}
                 onChange={(e) => setExperienceValue(e.target.value)}
-                className="bg-white p-2 rounded-xl"
+                className="bg-white p-2 rounded-xl border border-slate-200"
+                placeholder="Experience years"
               />
             </div>
           </div>
 
-          {/* SKILLS */}
           <div className="bg-slate-50 p-4 rounded-2xl">
             <h3 className="font-semibold mb-3">Skills</h3>
 
-            {/* ADD NEW SKILL */}
             <div className="flex gap-2 mb-3">
               <input
                 value={newSkill}
                 onChange={(e) => setNewSkill(e.target.value)}
-                className="bg-white rounded-xl p-2 w-full"
-                placeholder="Add skill"
+                placeholder="Add new skill"
+                className="bg-white p-2 rounded-xl border border-slate-200 w-full"
               />
+
               <button
                 type="button"
                 onClick={addSkill}
@@ -268,43 +242,31 @@ export default function UploadFilterModal({
               </button>
             </div>
 
-            <input
-              value={skillSearch}
-              onChange={(e) => setSkillSearch(e.target.value)}
-              className="w-full p-2 bg-white rounded-xl mb-3"
-              placeholder="Search skills"
-            />
-
-            <div className="grid grid-cols-2 gap-2">
-              {loadingData ? (
-                <p>Loading...</p>
-              ) : (
-                filteredSkills.map((skill) => (
-                  <label key={skill} className="flex gap-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedSkills.includes(skill)}
-                      onChange={() => toggleSkill(skill)}
-                    />
-                    {skill}
-                  </label>
-                ))
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {skills.map((skill) => (
+                <label key={skill} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selectedSkills.includes(skill)}
+                    onChange={() => toggleSkill(skill)}
+                  />
+                  <span>{skill}</span>
+                </label>
+              ))}
             </div>
           </div>
 
-          {/* QUALIFICATIONS */}
           <div className="bg-slate-50 p-4 rounded-2xl">
             <h3 className="font-semibold mb-3">Qualifications</h3>
 
-            {/* ADD NEW QUALIFICATION */}
             <div className="flex gap-2 mb-3">
               <input
                 value={newQualification}
                 onChange={(e) => setNewQualification(e.target.value)}
-                className="bg-white rounded-xl p-2 w-full"
-                placeholder="Add qualification"
+                placeholder="Add new qualification"
+                className="bg-white p-2 rounded-xl border border-slate-200 w-full"
               />
+
               <button
                 type="button"
                 onClick={addQualification}
@@ -314,45 +276,39 @@ export default function UploadFilterModal({
               </button>
             </div>
 
-            <input
-              value={qualSearch}
-              onChange={(e) => setQualSearch(e.target.value)}
-              className="w-full p-2 bg-white rounded-xl mb-3"
-              placeholder="Search qualifications"
-            />
-
-            <div className="grid grid-cols-2 gap-2">
-              {loadingData ? (
-                <p>Loading...</p>
-              ) : (
-                filteredQualifications.map((q) => (
-                  <label key={q} className="flex gap-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedQualifications.includes(q)}
-                      onChange={() => toggleQualification(q)}
-                    />
-                    {q}
-                  </label>
-                ))
-              )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {qualifications.map((qualification) => (
+                <label
+                  key={qualification}
+                  className="flex items-center gap-2 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedQualifications.includes(qualification)}
+                    onChange={() => toggleQualification(qualification)}
+                  />
+                  <span>{qualification}</span>
+                </label>
+              ))}
             </div>
           </div>
         </div>
 
-        {/* FOOTER */}
-        <div className="p-5 flex justify-end gap-3">
+        <div className="p-5 flex justify-end gap-3 border-t border-slate-100">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-slate-100 rounded-xl"
+            disabled={loading}
+            className="px-4 py-2 bg-slate-100 rounded-xl disabled:opacity-50"
           >
             Cancel
           </button>
 
           <button
+            type="button"
             onClick={handleUpload}
             disabled={loading}
-            className="px-5 py-2 bg-cyan-600 text-white rounded-xl"
+            className="px-5 py-2 bg-cyan-600 text-white rounded-xl disabled:opacity-50"
           >
             {loading ? "Uploading..." : "Filter & Upload"}
           </button>

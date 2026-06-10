@@ -1,9 +1,50 @@
 "use client";
 
 import UploadSection from "@/app/components/UploadSection";
-import StatCards from "@/app/components/StatCards";
-import { useEffect, useState, useRef } from "react";
+import StatCard from "@/app/components/StatCards";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+
+type UploadStatus =
+  | "Uploaded"
+  | "Processing"
+  | "Shortlisted"
+  | "Rejected"
+  | "Failed";
+
+type UploadItem = {
+  id: number;
+  batch_id: string;
+  filename: string;
+  file_url: string;
+  stored_file: string;
+  status: UploadStatus;
+  created_at: string | null;
+};
+
+type Stats = {
+  total: number;
+  pending: number;
+  processing: number;
+  shortlisted: number;
+  rejected: number;
+  failed: number;
+};
+
+type UploadProcessStatus =
+  | null
+  | "idle"
+  | "processing"
+  | "completed"
+  | "no_results"
+  | "failed";
+
+const API = process.env.NEXT_PUBLIC_API_URL;
+const WS = process.env.NEXT_PUBLIC_WS_URL;
+
+const headers = {
+  "ngrok-skip-browser-warning": "true",
+};
 
 function UploadSkeleton() {
   return (
@@ -17,6 +58,7 @@ function UploadSkeleton() {
             <div className="h-4 w-40 bg-slate-200 rounded mb-2" />
             <div className="h-3 w-24 bg-slate-200 rounded" />
           </div>
+
           <div className="h-6 w-20 bg-slate-200 rounded" />
         </div>
       ))}
@@ -24,198 +66,420 @@ function UploadSkeleton() {
   );
 }
 
-export default function DashboardPage() {
+function getStatusClass(status: UploadStatus) {
+  if (status === "Shortlisted") return "bg-green-100 text-green-700";
+  if (status === "Rejected") return "bg-red-100 text-red-700";
+  if (status === "Failed") return "bg-red-100 text-red-700";
+  if (status === "Processing") return "bg-yellow-100 text-yellow-700";
 
+  return "bg-cyan-100 text-cyan-700";
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString();
+}
+
+export default function DashboardPage() {
   const router = useRouter();
 
   const [page, setPage] = useState(1);
-  const [perPage] = useState(5);
+  const perPage = 5;
 
   const [total, setTotal] = useState(0);
-  const [uploads, setUploads] = useState<any[]>([]);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [loadingUploads, setLoadingUploads] = useState(false);
 
-  const [stats, setStats] = useState({
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
+  const [uploadProcessStatus, setUploadProcessStatus] =
+    useState<UploadProcessStatus>(null);
+
+  const [stats, setStats] = useState<Stats>({
     total: 0,
     pending: 0,
+    processing: 0,
     shortlisted: 0,
+    rejected: 0,
+    failed: 0,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
+  const clearMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const redirectedRef = useRef(false);
 
-  const totalPages = Math.ceil(total / perPage);
+  const totalPages = useMemo(
+    () => Math.max(Math.ceil(total / perPage), 1),
+    [total]
+  );
 
-  // =========================
-  // FETCH UPLOADS
-  // =========================
-  const fetchRecentUploads = async (pageNumber: number) => {
-    setLoadingUploads(true);
+  const clearTimers = useCallback(() => {
+    if (clearMessageTimerRef.current) {
+      clearTimeout(clearMessageTimerRef.current);
+      clearMessageTimerRef.current = null;
+    }
+
+    if (redirectTimerRef.current) {
+      clearTimeout(redirectTimerRef.current);
+      redirectTimerRef.current = null;
+    }
+  }, []);
+
+  const clearUploadMessageAfterDelay = useCallback(() => {
+    if (clearMessageTimerRef.current) {
+      clearTimeout(clearMessageTimerRef.current);
+    }
+
+    clearMessageTimerRef.current = setTimeout(() => {
+      setUploadProcessStatus(null);
+      setActiveBatchId(null);
+      redirectedRef.current = false;
+    }, 30000);
+  }, []);
+
+  const redirectToResumeViewerAfterDelay = useCallback(
+    (batchId: string) => {
+      if (redirectedRef.current) return;
+
+      redirectedRef.current = true;
+
+      if (redirectTimerRef.current) {
+        clearTimeout(redirectTimerRef.current);
+      }
+
+      redirectTimerRef.current = setTimeout(() => {
+        router.push(`/resume-viewer?batch=${batchId}`);
+      }, 1000);
+    },
+    [router]
+  );
+
+  const fetchRecentUploads = useCallback(
+    async (pageNumber: number = 1) => {
+      setLoadingUploads(true);
+
+      try {
+        const res = await fetch(
+          `${API}/upload/recent?page=${pageNumber}&per_page=${perPage}`,
+          { headers }
+        );
+
+        const result = await res.json();
+
+        setUploads(result.data || []);
+        setTotal(result.total || 0);
+        setPage(result.page || 1);
+      } catch (err) {
+        console.error("Recent uploads fetch error:", err);
+      } finally {
+        setLoadingUploads(false);
+      }
+    },
+    [perPage]
+  );
+
+  const refreshDashboard = useCallback(async () => {
+    try {
+      const [totalRes, pendingRes, shortlistedRes] = await Promise.all([
+        fetch(`${API}/upload/stats/total`, { headers }),
+        fetch(`${API}/upload/stats/pending`, { headers }),
+        fetch(`${API}/upload/stats/shortlisted`, { headers }),
+      ]);
+
+      const totalData = await totalRes.json();
+      const pendingData = await pendingRes.json();
+      const shortlistedData = await shortlistedRes.json();
+
+      setStats((prev) => ({
+        ...prev,
+        total: totalData.count || 0,
+        pending: pendingData.count || 0,
+        shortlisted: shortlistedData.count || 0,
+      }));
+    } catch (err) {
+      console.error("Stats refresh error:", err);
+    }
+  }, []);
+
+  const checkExcelAndRedirect = useCallback(
+    async (batchId: string) => {
+      try {
+        const res = await fetch(`${API}/resume/export/${batchId}`, {
+          headers,
+        });
+
+        const data = await res.json();
+
+        if (data?.excel_file) {
+          setUploadProcessStatus("completed");
+          clearUploadMessageAfterDelay();
+          redirectToResumeViewerAfterDelay(batchId);
+          return true;
+        }
+
+        return false;
+      } catch (error) {
+        console.error("Excel check failed:", error);
+        return false;
+      }
+    },
+    [clearUploadMessageAfterDelay, redirectToResumeViewerAfterDelay]
+  );
+
+  const checkBatchCompletion = useCallback(async () => {
+    if (!activeBatchId || uploadProcessStatus !== "processing") return;
 
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/upload/recent?page=${pageNumber}&per_page=${perPage}`,
-        {
-          headers: {
-            "ngrok-skip-browser-warning": "true",
-          },
-        }
-      );
+      const res = await fetch(`${API}/upload/recent?page=1&per_page=100`, {
+        headers,
+      });
 
       const result = await res.json();
 
-      setUploads(result.data);
-      setTotal(result.total);
-      setPage(result.page);
-    } catch (err) {
-      console.log("Pagination error:", err);
-    } finally {
-      setLoadingUploads(false);
+      const batchFiles: UploadItem[] = (result.data || []).filter(
+        (file: UploadItem) => file.batch_id === activeBatchId
+      );
+
+      if (batchFiles.length === 0) return;
+
+      const stillProcessing = batchFiles.some(
+        (file) => file.status === "Uploaded" || file.status === "Processing"
+      );
+
+      if (stillProcessing) return;
+
+      const hasShortlisted = batchFiles.some(
+        (file) => file.status === "Shortlisted"
+      );
+
+      const hasFailed = batchFiles.some((file) => file.status === "Failed");
+
+      if (hasShortlisted) {
+        await checkExcelAndRedirect(activeBatchId);
+      } else if (hasFailed) {
+        setUploadProcessStatus("failed");
+        clearUploadMessageAfterDelay();
+      } else {
+        setUploadProcessStatus("no_results");
+        clearUploadMessageAfterDelay();
+      }
+
+      fetchRecentUploads(1);
+      refreshDashboard();
+    } catch (error) {
+      console.error("Batch completion check failed:", error);
     }
-  };
+  }, [
+    activeBatchId,
+    uploadProcessStatus,
+    checkExcelAndRedirect,
+    clearUploadMessageAfterDelay,
+    fetchRecentUploads,
+    refreshDashboard,
+  ]);
 
-  // =========================
-  // REFRESH STATS
-  // =========================
-  const refreshDashboard = async () => {
-    try {
-      const [totalRes, pendingRes, shortlistedRes] = await Promise.all([
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/stats/total`, {
-          headers: {
-            "ngrok-skip-browser-warning": "true"
-          }
-        }),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/stats/pending`, {
-          headers: {
-            "ngrok-skip-browser-warning": "true"
-          }
-        }),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload/stats/shortlisted`, {
-          headers: {
-            "ngrok-skip-browser-warning": "true"
-          }
-        }),
-      ]);
-
-      const total = await totalRes.json();
-      const pending = await pendingRes.json();
-      const shortlisted = await shortlistedRes.json();
-
-      setStats({
-        total: total.count || 0,
-        pending: pending.count || 0,
-        shortlisted: shortlisted.count || 0,
-      });
-    } catch (err) {
-      console.log(err);
-    }
-  };
-
-  // =========================
-  // INITIAL LOAD
-  // =========================
   useEffect(() => {
     fetchRecentUploads(1);
     refreshDashboard();
-  }, []);
+  }, [fetchRecentUploads, refreshDashboard]);
 
-  // =========================
-  // SINGLE WEBSOCKET (FIXED)
-  // =========================
   useEffect(() => {
-    if (wsRef.current) return;
+    if (!WS || wsRef.current) return;
 
-    const ws = new WebSocket(`${process.env.NEXT_PUBLIC_WS_URL}/ws/dashboard`);
+    const wsUrl = `${WS}/ws/dashboard`;
+    const ws = new WebSocket(wsUrl);
+
     wsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+    ws.onopen = () => {
+      console.log("WebSocket connected:", wsUrl);
+    };
 
-      // ======================
-      // STATS UPDATE
-      // ======================
-      if (data.total !== undefined) {
-        setStats((prev) => ({
-          total: data.total ?? prev.total,
-          pending: data.pending ?? prev.pending,
-          shortlisted: data.shortlisted ?? prev.shortlisted,
-        }));
-      }
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
 
-      // ======================
-      // REFRESH DATA EVENTS
-      // ======================
-      if (
-        data.total !== undefined ||
-        data.pending !== undefined ||
-        data.event === "excel_exported" ||
-        data.event === "batch_completed" ||
-        data.event === "batch_completed_no_results"
-      ) {
-        fetchRecentUploads(1);
-        refreshDashboard();
-      }
+        if (data.event === "stats_update") {
+          setStats((prev) => ({
+            total: data.total ?? prev.total,
+            pending: data.pending ?? prev.pending,
+            processing: data.processing ?? prev.processing,
+            shortlisted: data.shortlisted ?? prev.shortlisted,
+            rejected: data.rejected ?? prev.rejected,
+            failed: data.failed ?? prev.failed,
+          }));
 
-      // ======================
-      // SPECIAL EVENTS
-      // ======================
-      if (data.event === "excel_exported") {
-        router.push("/resume-viewer");
-      }
+          fetchRecentUploads(1);
+          return;
+        }
 
-      if (data.event === "batch_completed_no_results") {
-        alert("All CVs were rejected in this batch");
+        if (data.event === "batch_completed_no_results") {
+          setUploadProcessStatus("no_results");
+          fetchRecentUploads(1);
+          refreshDashboard();
+          clearUploadMessageAfterDelay();
+          return;
+        }
+
+        if (data.event === "excel_exported") {
+          const batchId = data.batch_id || activeBatchId;
+
+          if (batchId) {
+            setUploadProcessStatus("completed");
+            fetchRecentUploads(1);
+            refreshDashboard();
+            clearUploadMessageAfterDelay();
+            redirectToResumeViewerAfterDelay(batchId);
+          }
+
+          return;
+        }
+
+        if (data.event === "batch_completed") {
+          fetchRecentUploads(1);
+          refreshDashboard();
+
+          if (data.shortlisted > 0) {
+            const batchId = data.batch_id || activeBatchId;
+
+            if (batchId) {
+              await checkExcelAndRedirect(batchId);
+            }
+          }
+
+          return;
+        }
+      } catch (error) {
+        console.error("WebSocket message error:", error);
       }
+    };
+
+    ws.onerror = () => {
+      console.warn("WebSocket connection failed:", wsUrl);
+    };
+
+    ws.onclose = () => {
+      wsRef.current = null;
     };
 
     return () => {
       ws.close();
       wsRef.current = null;
     };
-  }, [process.env.NEXT_PUBLIC_WS_URL]);
+  }, [
+    activeBatchId,
+    fetchRecentUploads,
+    refreshDashboard,
+    clearUploadMessageAfterDelay,
+    redirectToResumeViewerAfterDelay,
+    checkExcelAndRedirect,
+  ]);
 
-  // =========================
-  // RENDER
-  // =========================
+  useEffect(() => {
+    if (!activeBatchId || uploadProcessStatus !== "processing") return;
+
+    const interval = setInterval(() => {
+      checkBatchCompletion();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [activeBatchId, uploadProcessStatus, checkBatchCompletion]);
+
+  useEffect(() => {
+    return () => {
+      clearTimers();
+    };
+  }, [clearTimers]);
+
   return (
     <div className="space-y-8 text-slate-900">
-      {/* STATS */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCards title="Total CVs" value={String(stats.total)} />
-        <StatCards title="Pending" value={String(stats.pending)} />
-        <StatCards title="Shortlisted" value={String(stats.shortlisted)} />
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-6">
+        <StatCard title="Total CVs" value={stats.total} />
+
+        <StatCard
+          title="Pending"
+          value={stats.pending}
+          color="text-cyan-700"
+        />
+
+        <StatCard
+          title="Processing"
+          value={stats.processing}
+          color="text-yellow-600"
+        />
+
+        <StatCard
+          title="Shortlisted"
+          value={stats.shortlisted}
+          color="text-green-600"
+        />
+
+        <StatCard
+          title="Rejected"
+          value={stats.rejected}
+          color="text-red-600"
+        />
+
+        <StatCard
+          title="Failed"
+          value={stats.failed}
+          color="text-red-700"
+        />
       </div>
 
-      {/* UPLOAD */}
-      <UploadSection onUploadSuccess={refreshDashboard} />
+      <UploadSection
+        status={uploadProcessStatus}
+        onUploadStarted={(batchId) => {
+          clearTimers();
+          redirectedRef.current = false;
+          setActiveBatchId(batchId);
+          setUploadProcessStatus("processing");
+          fetchRecentUploads(1);
+          refreshDashboard();
+        }}
+      />
 
-      {/* RECENT */}
       <div className="bg-white rounded-3xl p-6 shadow-sm">
         <h2 className="text-xl font-semibold mb-5">Recent Uploads</h2>
 
         {loadingUploads ? (
           <UploadSkeleton />
+        ) : uploads.length === 0 ? (
+          <div className="text-center py-10 text-slate-500">
+            No uploads found.
+          </div>
         ) : (
           <div className="space-y-4">
-            {uploads.map((file, index) => (
+            {uploads.map((file) => (
               <div
-                key={index}
+                key={file.id}
                 className="flex items-center justify-between border rounded-2xl px-5 py-4"
               >
                 <div>
                   <a
-                    href={`${process.env.NEXT_PUBLIC_API_URL}/uploads/${file.file_url.split(/[\\/]/).pop()}`}
+                    href={`${API}/uploads/${file.stored_file}`}
                     target="_blank"
                     rel="noopener noreferrer"
+                    className="font-medium text-slate-900 hover:text-cyan-700"
                   >
                     {file.filename}
                   </a>
 
                   <p className="text-sm text-slate-500">
-                    {new Date(file.created_at + "Z").toLocaleString()}
+                    {formatDate(file.created_at)}
                   </p>
                 </div>
 
-                <span className="bg-cyan-100 text-cyan-700 px-4 py-1 rounded-full text-sm">
+                <span
+                  className={`px-4 py-1 rounded-full text-sm ${getStatusClass(
+                    file.status
+                  )}`}
+                >
                   {file.status}
                 </span>
               </div>
@@ -223,35 +487,37 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* PAGINATION */}
-        <div className="flex items-center justify-center gap-2 mt-6">
-          <button
-            disabled={page === 1}
-            onClick={() => fetchRecentUploads(page - 1)}
-            className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
-          >
-            Prev
-          </button>
-
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-2 mt-6">
             <button
-              key={p}
-              onClick={() => fetchRecentUploads(p)}
-              className={`px-3 py-2 rounded ${p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
-                }`}
+              disabled={page === 1}
+              onClick={() => fetchRecentUploads(page - 1)}
+              className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
             >
-              {p}
+              Prev
             </button>
-          ))}
 
-          <button
-            disabled={page === totalPages}
-            onClick={() => fetchRecentUploads(page + 1)}
-            className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
-          >
-            Next
-          </button>
-        </div>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                onClick={() => fetchRecentUploads(p)}
+                className={`px-3 py-2 rounded ${
+                  p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+
+            <button
+              disabled={page === totalPages}
+              onClick={() => fetchRecentUploads(page + 1)}
+              className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

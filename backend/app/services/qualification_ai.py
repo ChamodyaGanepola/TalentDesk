@@ -7,45 +7,49 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def normalize_and_match_qualifications(cv_quals, required_quals):
     """
-    LENIENT QUALIFICATION MATCHER:
-    - Treats different degree names as equivalent if related
-    - Allows semantic matching (not strict string match)
-    - Extra CV qualifications are OK
+    Lenient qualification matcher.
     """
 
     if not required_quals:
-        return {"match": True, "reason": "No required qualifications"}
+        return {
+            "match": True,
+            "reason": "No required qualifications"
+        }
+
+    if not cv_quals:
+        return {
+            "match": False,
+            "reason": "Candidate has no qualifications"
+        }
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=os.getenv("OPENAI_QUALIFICATION_MODEL", "gpt-4o-mini"),
+            temperature=0,
             response_format={"type": "json_object"},
             messages=[
                 {
                     "role": "system",
                     "content": """
-You are a VERY LENIENT qualification matcher.
+You are a lenient qualification matcher.
 
-IMPORTANT RULES:
-- Do NOT require exact wording match
-- Treat similar degrees as equivalent
-- Focus on meaning, not names
-- Be flexible with academic titles
+Rules:
+- Do not require exact wording.
+- Treat similar degrees as equivalent.
+- Focus on academic/professional meaning.
+- Extra CV qualifications are allowed.
+- Reject only if the required qualification and CV qualification are completely unrelated.
 
-Example equivalences:
+Examples:
 - Computer Science ≈ Software Engineering ≈ IT ≈ Information Systems
 - Electrical Engineering ≈ Electronics Engineering
 - Business Management ≈ Business Administration
 - Data Science ≈ Computer Science ≈ AI
 
-Rules:
-- If CV has a related field, consider it MATCH
-- Ignore small naming differences
-- Only reject if completely unrelated field
+Return only JSON:
 
-Return ONLY JSON:
 {
-  "match": true/false,
+  "match": true,
   "reason": ""
 }
 """

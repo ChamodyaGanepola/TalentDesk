@@ -7,6 +7,9 @@ load_dotenv()
 
 MYSQL_URL = os.getenv("MYSQL_URL")
 
+if not MYSQL_URL:
+    raise ValueError("MYSQL_URL is missing in .env file")
+
 engine = create_engine(
     MYSQL_URL,
     pool_pre_ping=True,
@@ -20,6 +23,7 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()

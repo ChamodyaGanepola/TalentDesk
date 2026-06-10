@@ -1,110 +1,80 @@
 "use client";
 
 import { UploadCloud } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import UploadFilterModal from "@/app/components/UploadFilterModal";
-import { useRouter } from "next/navigation";
 
-export default function UploadSection({ onUploadSuccess }: any) {
+type UploadProcessStatus =
+  | null
+  | "idle"
+  | "processing"
+  | "completed"
+  | "no_results"
+  | "failed";
 
+type Props = {
+  status?: UploadProcessStatus;
+  onUploadStarted?: (batchId: string) => void;
+};
+
+export default function UploadSection({
+  status = null,
+  onUploadStarted,
+}: Props) {
   const [openModal, setOpenModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
-  const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
-  const [status, setStatus] = useState<
-    null | "processing" | "rejected" | "completed"
-  >(null);
 
-  const router = useRouter();
-  const wsRef = useRef<WebSocket | null>(null);
+  const handleFileChange = (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
 
-  const onUploadSuccessRef = useRef(onUploadSuccess);
+    const validFiles = Array.from(fileList).filter((file) =>
+      file.name.toLowerCase().endsWith(".pdf")
+    );
 
-  useEffect(() => {
-    onUploadSuccessRef.current = onUploadSuccess;
-  }, [onUploadSuccess]);
+    if (validFiles.length === 0) {
+      alert("Only PDF files are allowed.");
+      return;
+    }
 
-  const resetStatusAfterDelay = () => {
-    setTimeout(() => setStatus(null), 3000);
+    const dataTransfer = new DataTransfer();
+
+    validFiles.forEach((file) => {
+      dataTransfer.items.add(file);
+    });
+
+    setSelectedFiles(dataTransfer.files);
+    setOpenModal(true);
   };
 
-  useEffect(() => {
-    const ws = new WebSocket(`${WS_URL}/ws/dashboard`);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      // 🔥 REAL-TIME CV UPDATE (NEW)
-      if (data.event === "cv_processed") {
-        setStatus("processing");
-        return;
-      }
-
-      // batch no results
-      if (data.event === "batch_completed_no_results") {
-        setStatus("rejected");
-        onUploadSuccessRef.current?.();
-        resetStatusAfterDelay();
-      }
-
-      // batch completed
-      if (data.event === "batch_completed") {
-        setStatus("completed");
-        onUploadSuccessRef.current?.();
-        resetStatusAfterDelay();
-      }
-
-      // excel ready → navigate
-      if (data.event === "excel_exported") {
-        setStatus("completed");
-
-        setTimeout(() => {
-          router.push(`/resume-viewer?batch=${data.batch_id}`);
-        }, 800);
-      }
-    };
-
-    return () => {
-      ws.close();
-      wsRef.current = null;
-    };
-  }, []);
-
   return (
-    <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed text-center">
-
+    <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed border-slate-300 text-center">
       <div className="flex justify-center mb-5">
         <div className="w-20 h-20 rounded-full bg-cyan-100 flex items-center justify-center">
           <UploadCloud size={40} className="text-cyan-600" />
         </div>
       </div>
 
-      <h2 className="text-2xl font-bold">Bulk Upload CVs</h2>
+      <h2 className="text-2xl font-bold text-slate-900">Bulk Upload CVs</h2>
+
+      <p className="text-sm text-slate-500 mt-2">
+        Upload PDF CV files and apply screening filters.
+      </p>
 
       <input
         type="file"
         multiple
         id="cvUpload"
         className="hidden"
-        accept=".pdf,.doc,.docx"
+        accept=".pdf,application/pdf"
         onChange={(e) => {
-          if (!e.target.files) return;
-
-          const filesArray = Array.from(e.target.files);
-
-          const dt = new DataTransfer();
-          filesArray.forEach((f) => dt.items.add(f));
-
-          setSelectedFiles(dt.files);
-          setOpenModal(true);
-
+          handleFileChange(e.target.files);
           e.target.value = "";
         }}
       />
 
       <label
         htmlFor="cvUpload"
-        className="px-8 py-4 bg-cyan-600 text-white rounded-2xl cursor-pointer inline-flex mt-5"
+        className="px-8 py-4 bg-cyan-600 hover:bg-cyan-700 text-white rounded-2xl cursor-pointer inline-flex mt-5 transition"
       >
         Upload CV Files
       </label>
@@ -116,9 +86,10 @@ export default function UploadSection({ onUploadSuccess }: any) {
             setOpenModal(false);
             setSelectedFiles(null);
           }}
-          onProcessingStart={() => {
+          onProcessingStart={(batchId: string) => {
             setOpenModal(false);
-            setStatus("processing");
+            setSelectedFiles(null);
+            onUploadStarted?.(batchId);
           }}
         />
       )}
@@ -129,15 +100,21 @@ export default function UploadSection({ onUploadSuccess }: any) {
         </p>
       )}
 
-      {status === "rejected" && (
-        <p className="mt-5 text-red-600 font-medium">
-          All CVs were rejected
+      {status === "completed" && (
+        <p className="mt-5 text-green-600 font-medium">
+          Processing completed. Redirecting to Resume Viewer...
         </p>
       )}
 
-      {status === "completed" && (
-        <p className="mt-5 text-green-600 font-medium">
-          Processing completed
+      {status === "no_results" && (
+        <p className="mt-5 text-red-600 font-medium">
+          Processing completed, but no candidates were shortlisted. No Excel file was generated.
+        </p>
+      )}
+
+      {status === "failed" && (
+        <p className="mt-5 text-red-600 font-medium">
+          Processing failed. Please check recent uploads.
         </p>
       )}
     </div>

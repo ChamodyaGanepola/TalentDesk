@@ -3,19 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 import asyncio
+import os
 
 from app.routes.auth import router as auth_router
 from app.routes.upload import router as upload_router
 from app.ws.manager import manager
 from app.core.cv_worker import cv_worker_loop
-from fastapi.middleware.cors import CORSMiddleware
-app = FastAPI()
+
+app = FastAPI(title="Talent Desk API")
 
 # =========================
-# CORS (FINAL CLEAN FIX)
+# CORS
 # =========================
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -32,6 +31,9 @@ app.add_middleware(
 # =========================
 # Static Files
 # =========================
+os.makedirs("exports", exist_ok=True)
+os.makedirs("uploads", exist_ok=True)
+
 app.mount("/exports", StaticFiles(directory="exports"), name="exports")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -46,8 +48,10 @@ app.include_router(upload_router)
 # =========================
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(cv_worker_loop())
-    print("CV worker started")
+    if os.getenv("ENABLE_CV_WORKER", "true").lower() == "true":
+        asyncio.create_task(cv_worker_loop())
+        print("CV worker started")
+
 
 # =========================
 # WebSocket
@@ -60,4 +64,6 @@ async def dashboard_ws(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception:
         manager.disconnect(websocket)
