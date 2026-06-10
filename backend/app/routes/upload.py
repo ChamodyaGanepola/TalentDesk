@@ -524,3 +524,145 @@ def all_stats(db: Session = Depends(get_db)):
         "rejected": row["rejected"] or 0,
         "failed": row["failed"] or 0,
     }
+@router.get("/upload/batches")
+def get_batches(db: Session = Depends(get_db)):
+    rows = db.execute(text("""
+        SELECT
+            ub.batch_id,
+            ub.experience_type,
+            ub.experience_value,
+            ub.created_at,
+            COUNT(u.id) AS total,
+            SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN u.status='Processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN u.status='Shortlisted' THEN 1 ELSE 0 END) AS shortlisted,
+            SUM(CASE WHEN u.status='Rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN u.status='Failed' THEN 1 ELSE 0 END) AS failed
+        FROM upload_batches ub
+        LEFT JOIN uploads u ON u.batch_id = ub.batch_id
+        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.created_at
+        ORDER BY ub.created_at DESC
+    """)).mappings().all()
+
+    return [
+        {
+            "batch_id": r["batch_id"],
+            "experience_type": r["experience_type"],
+            "experience_value": r["experience_value"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "total": r["total"] or 0,
+            "pending": r["pending"] or 0,
+            "processing": r["processing"] or 0,
+            "shortlisted": r["shortlisted"] or 0,
+            "rejected": r["rejected"] or 0,
+            "failed": r["failed"] or 0,
+        }
+        for r in rows
+    ]    
+    
+ # =========================
+# BATCH DETAILS
+# =========================
+@router.get("/upload/batch/{batch_id}")
+def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
+    batch = db.execute(text("""
+        SELECT
+            ub.batch_id,
+            ub.experience_type,
+            ub.experience_value,
+            ub.created_at,
+            COUNT(u.id) AS total,
+            SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN u.status='Processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN u.status='Shortlisted' THEN 1 ELSE 0 END) AS shortlisted,
+            SUM(CASE WHEN u.status='Rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN u.status='Failed' THEN 1 ELSE 0 END) AS failed
+        FROM upload_batches ub
+        LEFT JOIN uploads u ON u.batch_id = ub.batch_id
+        WHERE ub.batch_id = :batch_id
+        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.created_at
+    """), {
+        "batch_id": batch_id
+    }).mappings().first()
+
+    if not batch:
+        return {
+            "success": False,
+            "message": "Batch not found"
+        }
+
+    skills = db.execute(text("""
+        SELECT s.name
+        FROM batch_skills bs
+        JOIN skills s ON s.id = bs.skill_id
+        WHERE bs.batch_id = :batch_id
+        ORDER BY s.name
+    """), {
+        "batch_id": batch_id
+    }).mappings().all()
+
+    qualifications = db.execute(text("""
+        SELECT q.name
+        FROM batch_qualifications bq
+        JOIN qualifications q ON q.id = bq.qualification_id
+        WHERE bq.batch_id = :batch_id
+        ORDER BY q.name
+    """), {
+        "batch_id": batch_id
+    }).mappings().all()
+
+    uploads = db.execute(text("""
+        SELECT
+            id,
+            batch_id,
+            file_name,
+            file_url,
+            status,
+            created_at
+        FROM uploads
+        WHERE batch_id = :batch_id
+        ORDER BY created_at DESC
+    """), {
+        "batch_id": batch_id
+    }).mappings().all()
+
+    export_row = db.execute(text("""
+        SELECT excel_file
+        FROM batch_exports
+        WHERE batch_id = :batch_id
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "batch_id": batch_id
+    }).mappings().first()
+
+    return {
+        "success": True,
+        "batch": {
+            "batch_id": batch["batch_id"],
+            "experience_type": batch["experience_type"],
+            "experience_value": batch["experience_value"],
+            "created_at": batch["created_at"].isoformat() if batch["created_at"] else None,
+            "total": batch["total"] or 0,
+            "pending": batch["pending"] or 0,
+            "processing": batch["processing"] or 0,
+            "shortlisted": batch["shortlisted"] or 0,
+            "rejected": batch["rejected"] or 0,
+            "failed": batch["failed"] or 0,
+            "skills": [s["name"] for s in skills],
+            "qualifications": [q["name"] for q in qualifications],
+            "excel_file": export_row["excel_file"] if export_row else None
+        },
+        "uploads": [
+            {
+                "id": u["id"],
+                "batch_id": u["batch_id"],
+                "filename": u["file_name"],
+                "file_url": u["file_url"],
+                "stored_file": os.path.basename(u["file_url"]),
+                "status": u["status"],
+                "created_at": u["created_at"].isoformat() if u["created_at"] else None
+            }
+            for u in uploads
+        ]
+    }   

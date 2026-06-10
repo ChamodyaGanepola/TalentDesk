@@ -39,6 +39,19 @@ type UploadProcessStatus =
   | "no_results"
   | "failed";
 
+type BatchItem = {
+  batch_id: string;
+  experience_type: string;
+  experience_value: number;
+  created_at: string | null;
+  total: number;
+  pending: number;
+  processing: number;
+  shortlisted: number;
+  rejected: number;
+  failed: number;
+};
+
 const API = process.env.NEXT_PUBLIC_API_URL;
 const WS = process.env.NEXT_PUBLIC_WS_URL;
 
@@ -91,9 +104,12 @@ export default function DashboardPage() {
   const [page, setPage] = useState(1);
   const perPage = 5;
 
-  const [total, setTotal] = useState(0);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [loadingUploads, setLoadingUploads] = useState(false);
+
+  const [batches, setBatches] = useState<BatchItem[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = useState<string>("latest");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [uploadProcessStatus, setUploadProcessStatus] =
@@ -109,14 +125,46 @@ export default function DashboardPage() {
   });
 
   const wsRef = useRef<WebSocket | null>(null);
-  const clearMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const clearMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const redirectedRef = useRef(false);
 
-  const totalPages = useMemo(
-    () => Math.max(Math.ceil(total / perPage), 1),
-    [total]
-  );
+  const selectedBatch = useMemo(() => {
+    if (selectedBatchId === "latest") return batches[0] || null;
+    if (selectedBatchId === "all") return null;
+
+    return batches.find((batch) => batch.batch_id === selectedBatchId) || null;
+  }, [batches, selectedBatchId]);
+
+  const filteredUploads = useMemo(() => {
+    if (selectedBatchId === "all") {
+      return uploads;
+    }
+
+    if (selectedBatchId === "latest") {
+      const latestBatchId = batches[0]?.batch_id;
+
+      if (!latestBatchId) return uploads;
+
+      return uploads.filter((file) => file.batch_id === latestBatchId);
+    }
+
+    return uploads.filter((file) => file.batch_id === selectedBatchId);
+  }, [uploads, batches, selectedBatchId]);
+
+  const totalPages = useMemo(() => {
+    return Math.max(Math.ceil(filteredUploads.length / perPage), 1);
+  }, [filteredUploads.length, perPage]);
+
+  const paginatedUploads = useMemo(() => {
+    const start = (page - 1) * perPage;
+    const end = start + perPage;
+
+    return filteredUploads.slice(start, end);
+  }, [filteredUploads, page, perPage]);
 
   const clearTimers = useCallback(() => {
     if (clearMessageTimerRef.current) {
@@ -159,47 +207,52 @@ export default function DashboardPage() {
     [router]
   );
 
-  const fetchRecentUploads = useCallback(
-    async (pageNumber: number = 1) => {
-      setLoadingUploads(true);
+  const fetchBatches = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/upload/batches`, { headers });
+      const data = await res.json();
 
-      try {
-        const res = await fetch(
-          `${API}/upload/recent?page=${pageNumber}&per_page=${perPage}`,
-          { headers }
-        );
+      setBatches(data || []);
+    } catch (err) {
+      console.error("Batch fetch error:", err);
+    }
+  }, []);
 
-        const result = await res.json();
+  const fetchRecentUploads = useCallback(async () => {
+    setLoadingUploads(true);
 
-        setUploads(result.data || []);
-        setTotal(result.total || 0);
-        setPage(result.page || 1);
-      } catch (err) {
-        console.error("Recent uploads fetch error:", err);
-      } finally {
-        setLoadingUploads(false);
-      }
-    },
-    [perPage]
-  );
+    try {
+      const res = await fetch(`${API}/upload/recent?page=1&per_page=100`, {
+        headers,
+      });
+
+      const result = await res.json();
+
+      setUploads(result.data || []);
+    } catch (err) {
+      console.error("Recent uploads fetch error:", err);
+    } finally {
+      setLoadingUploads(false);
+    }
+  }, []);
 
   const refreshDashboard = useCallback(async () => {
-  try {
-    const res = await fetch(`${API}/upload/stats/all`, { headers });
-    const data = await res.json();
+    try {
+      const res = await fetch(`${API}/upload/stats/all`, { headers });
+      const data = await res.json();
 
-    setStats({
-      total: data.total || 0,
-      pending: data.pending || 0,
-      processing: data.processing || 0,
-      shortlisted: data.shortlisted || 0,
-      rejected: data.rejected || 0,
-      failed: data.failed || 0,
-    });
-  } catch (err) {
-    console.error("Stats refresh error:", err);
-  }
-}, []);
+      setStats({
+        total: data.total || 0,
+        pending: data.pending || 0,
+        processing: data.processing || 0,
+        shortlisted: data.shortlisted || 0,
+        rejected: data.rejected || 0,
+        failed: data.failed || 0,
+      });
+    } catch (err) {
+      console.error("Stats refresh error:", err);
+    }
+  }, []);
 
   const checkExcelAndRedirect = useCallback(
     async (batchId: string) => {
@@ -264,7 +317,8 @@ export default function DashboardPage() {
         clearUploadMessageAfterDelay();
       }
 
-      fetchRecentUploads(1);
+      fetchRecentUploads();
+      fetchBatches();
       refreshDashboard();
     } catch (error) {
       console.error("Batch completion check failed:", error);
@@ -275,13 +329,38 @@ export default function DashboardPage() {
     checkExcelAndRedirect,
     clearUploadMessageAfterDelay,
     fetchRecentUploads,
+    fetchBatches,
     refreshDashboard,
   ]);
 
   useEffect(() => {
-    fetchRecentUploads(1);
+    fetchRecentUploads();
     refreshDashboard();
-  }, [fetchRecentUploads, refreshDashboard]);
+    fetchBatches();
+  }, [fetchRecentUploads, refreshDashboard, fetchBatches]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        setDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     if (!WS || wsRef.current) return;
@@ -309,13 +388,15 @@ export default function DashboardPage() {
             failed: data.failed ?? prev.failed,
           }));
 
-          fetchRecentUploads(1);
+          fetchRecentUploads();
+          fetchBatches();
           return;
         }
 
         if (data.event === "batch_completed_no_results") {
           setUploadProcessStatus("no_results");
-          fetchRecentUploads(1);
+          fetchRecentUploads();
+          fetchBatches();
           refreshDashboard();
           clearUploadMessageAfterDelay();
           return;
@@ -326,7 +407,8 @@ export default function DashboardPage() {
 
           if (batchId) {
             setUploadProcessStatus("completed");
-            fetchRecentUploads(1);
+            fetchRecentUploads();
+            fetchBatches();
             refreshDashboard();
             clearUploadMessageAfterDelay();
             redirectToResumeViewerAfterDelay(batchId);
@@ -336,7 +418,8 @@ export default function DashboardPage() {
         }
 
         if (data.event === "batch_completed") {
-          fetchRecentUploads(1);
+          fetchRecentUploads();
+          fetchBatches();
           refreshDashboard();
 
           if (data.shortlisted > 0) {
@@ -369,6 +452,7 @@ export default function DashboardPage() {
   }, [
     activeBatchId,
     fetchRecentUploads,
+    fetchBatches,
     refreshDashboard,
     clearUploadMessageAfterDelay,
     redirectToResumeViewerAfterDelay,
@@ -433,24 +517,148 @@ export default function DashboardPage() {
           clearTimers();
           redirectedRef.current = false;
           setActiveBatchId(batchId);
+          setSelectedBatchId("latest");
+          setPage(1);
           setUploadProcessStatus("processing");
-          fetchRecentUploads(1);
+          fetchRecentUploads();
+          fetchBatches();
           refreshDashboard();
         }}
       />
 
-      <div className="bg-white rounded-3xl p-6 shadow-sm">
-        <h2 className="text-xl font-semibold mb-5">Recent Uploads</h2>
+      <div className="bg-white rounded-3xl p-6 shadow-sm overflow-visible">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
+          <div>
+            <h2 className="text-xl font-semibold">Recent Uploads</h2>
+
+            {selectedBatch && (
+              <p className="text-sm text-slate-500 mt-1">
+                Selected batch: {selectedBatch.total} CVs,{" "}
+                {selectedBatch.shortlisted} shortlisted,{" "}
+                {selectedBatch.rejected} rejected
+              </p>
+            )}
+
+            {selectedBatchId === "all" && (
+              <p className="text-sm text-slate-500 mt-1">
+                Showing all uploaded CVs
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div ref={dropdownRef} className="relative w-full sm:w-80">
+              <button
+                type="button"
+                onClick={() => setDropdownOpen((prev) => !prev)}
+                className="w-full border border-slate-300 rounded-xl px-4 py-2 text-sm text-left bg-white text-slate-700 flex justify-between items-center"
+              >
+                <span className="truncate">
+                  {selectedBatchId === "latest"
+                    ? "Latest Batch"
+                    : selectedBatchId === "all"
+                    ? "All Batches"
+                    : selectedBatch
+                    ? `${selectedBatch.total} CVs - ${
+                        selectedBatch.created_at
+                          ? new Date(
+                              selectedBatch.created_at
+                            ).toLocaleString()
+                          : "-"
+                      }`
+                    : "Select Batch"}
+                </span>
+
+                <span className="text-slate-400 ml-2">▼</span>
+              </button>
+
+              {dropdownOpen && (
+                <div className="absolute left-0 top-full mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-xl z-[9999] max-h-72 overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedBatchId("latest");
+                      setPage(1);
+                      setDropdownOpen(false);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50"
+                  >
+                    Latest Batch
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedBatchId("all");
+                      setPage(1);
+                      setDropdownOpen(false);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50 border-t"
+                  >
+                    All Batches
+                  </button>
+
+                  {batches.map((batch, index) => (
+                    <button
+                      key={batch.batch_id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBatchId(batch.batch_id);
+                        setPage(1);
+                        setDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50 border-t"
+                    >
+                      <div className="font-medium">
+                        Batch {index + 1} - {batch.total} CVs
+                      </div>
+
+                      <div className="text-xs text-slate-500">
+                        {batch.shortlisted} shortlisted, {batch.rejected}{" "}
+                        rejected
+                      </div>
+
+                      <div className="text-xs text-slate-400">
+                        {batch.created_at
+                          ? new Date(batch.created_at).toLocaleString()
+                          : "-"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedBatchId !== "all" && batches.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const batchId =
+                    selectedBatchId === "latest"
+                      ? batches[0]?.batch_id
+                      : selectedBatchId;
+
+                  if (batchId) {
+                    router.push(`/batch-details?batch=${batchId}`);
+                  }
+                }}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-sm whitespace-nowrap"
+              >
+                View Batch Details
+              </button>
+            )}
+          </div>
+        </div>
 
         {loadingUploads ? (
           <UploadSkeleton />
-        ) : uploads.length === 0 ? (
+        ) : filteredUploads.length === 0 ? (
           <div className="text-center py-10 text-slate-500">
             No uploads found.
           </div>
         ) : (
           <div className="space-y-4">
-            {uploads.map((file) => (
+            {paginatedUploads.map((file) => (
               <div
                 key={file.id}
                 className="flex items-center justify-between border rounded-2xl px-5 py-4"
@@ -486,7 +694,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-center gap-2 mt-6">
             <button
               disabled={page === 1}
-              onClick={() => fetchRecentUploads(page - 1)}
+              onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
               className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
             >
               Prev
@@ -495,7 +703,7 @@ export default function DashboardPage() {
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
               <button
                 key={p}
-                onClick={() => fetchRecentUploads(p)}
+                onClick={() => setPage(p)}
                 className={`px-3 py-2 rounded ${
                   p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
                 }`}
@@ -506,7 +714,9 @@ export default function DashboardPage() {
 
             <button
               disabled={page === totalPages}
-              onClick={() => fetchRecentUploads(page + 1)}
+              onClick={() =>
+                setPage((prev) => Math.min(prev + 1, totalPages))
+              }
               className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
             >
               Next
