@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { UploadCloud, FileText, LogOut } from "lucide-react";
+import { UploadCloud, FileText } from "lucide-react";
 
 export default function Sidebar() {
     const pathname = usePathname();
@@ -21,13 +21,8 @@ export default function Sidebar() {
         },
     ];
 
-    const handleLogout = () => {
-        localStorage.removeItem("user");
-        window.location.href = "/";
-    };
-
     return (
-        <aside className="w-72 bg-white border-r border-slate-200 flex flex-col justify-between min-h-screen">
+        <aside className="w-72 bg-white border-r border-slate-200 flex flex-col min-h-screen">
             <div>
                 {/* Logo Section */}
                 <div className="p-6 border-b border-slate-100">
@@ -68,17 +63,6 @@ export default function Sidebar() {
                         );
                     })}
                 </nav>
-            </div>
-
-            {/* Logout */}
-            <div className="p-4 border-t border-slate-200">
-                <button
-                    onClick={handleLogout}
-                    className="w-full flex items-center gap-3 bg-red-500 hover:bg-red-600 text-white px-4 py-3 rounded-xl transition"
-                >
-                    <LogOut size={20} />
-                    Logout
-                </button>
             </div>
         </aside>
     );

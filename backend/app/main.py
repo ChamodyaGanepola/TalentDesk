@@ -34,7 +34,7 @@ app.add_middleware(
 os.makedirs("exports", exist_ok=True)
 os.makedirs("uploads", exist_ok=True)
 
-app.mount("/exports", StaticFiles(directory="exports"), Qname="exports")
+app.mount("/exports", StaticFiles(directory="exports"), name="exports")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # =========================
