@@ -13,6 +13,7 @@ import {
   toSLDateKey,
 } from "@/app/lib/datetime";
 import { prefetchMasters } from "@/app/lib/mastersCache";
+import { apiFetch, getApiBase, getWsBase } from "@/app/lib/api";
 import { getAuthHeaders } from "@/app/lib/auth";
 import { useToast } from "@/app/components/ui/Toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -65,9 +66,6 @@ type BatchItem = {
   rejected: number;
   failed: number;
 };
-
-const API = process.env.NEXT_PUBLIC_API_URL;
-const WS = process.env.NEXT_PUBLIC_WS_URL;
 
 function getStatusClass(status: UploadStatus) {
   if (status === "Shortlisted") return "bg-green-100 text-green-700";
@@ -138,6 +136,8 @@ function resolveUploadApiFilters(
 export default function DashboardPage() {
   const router = useRouter();
   const { showToast } = useToast();
+  const API = getApiBase();
+  const WS = getWsBase();
 
   const perPage = 10;
 
@@ -303,9 +303,11 @@ export default function DashboardPage() {
         if (filters.batch_id) params.set("batch_id", filters.batch_id);
         if (filters.date) params.set("date", filters.date);
 
-        const res = await fetch(`${API}/upload/recent?${params.toString()}`, {
+        const res = await apiFetch(`/upload/recent?${params.toString()}`, {
           headers: getAuthHeaders(),
         });
+
+        if (!res) return;
 
         const result = await res.json();
 
@@ -406,9 +408,10 @@ export default function DashboardPage() {
 
   const fetchBatches = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/upload/batches`, { headers: getAuthHeaders() });
-      const data = await res.json();
+      const res = await apiFetch("/upload/batches", { headers: getAuthHeaders() });
+      if (!res?.ok) return;
 
+      const data = await res.json();
       setBatches(data || []);
     } catch (err) {
       console.error("Batch fetch error:", err);
@@ -417,7 +420,9 @@ export default function DashboardPage() {
 
   const refreshDashboard = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/upload/stats/all`, { headers: getAuthHeaders() });
+      const res = await apiFetch("/upload/stats/all", { headers: getAuthHeaders() });
+      if (!res?.ok) return;
+
       const data = await res.json();
 
       setStats({
@@ -438,9 +443,11 @@ export default function DashboardPage() {
   const checkExcelAndRedirect = useCallback(
     async (batchId: string) => {
       try {
-        const res = await fetch(`${API}/resume/export/${batchId}`, {
+        const res = await apiFetch(`/resume/export/${batchId}`, {
           headers: getAuthHeaders(),
         });
+
+        if (!res) return false;
 
         const data = await res.json();
 
@@ -520,10 +527,12 @@ export default function DashboardPage() {
     if (!activeBatchId || uploadProcessStatus !== "processing") return;
 
     try {
-      const res = await fetch(
-        `${API}/upload/recent?batch_id=${activeBatchId}&per_page=100`,
+      const res = await apiFetch(
+        `/upload/recent?batch_id=${activeBatchId}&per_page=100`,
         { headers: getAuthHeaders() }
       );
+
+      if (!res) return;
 
       const result = await res.json();
       const allFiles: UploadItem[] = result.data || [];

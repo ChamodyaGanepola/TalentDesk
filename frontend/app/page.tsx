@@ -11,10 +11,7 @@ import {
 } from "@/app/lib/auth";
 import { useAuth } from "@/app/providers/AuthProvider";
 
-const API = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(
-  /\/$/,
-  ""
-);
+import { getApiBase, apiFetch, apiHeaders } from "@/app/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -47,16 +44,36 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API}/auth/login`, {
+      if (!getApiBase()) {
+        setError("API URL is not configured. Set NEXT_PUBLIC_API_URL in your environment.");
+        return;
+      }
+
+      const res = await apiFetch("/auth/login", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "true",
-        },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await res.json();
+      if (!res) {
+        setError("Cannot reach the server. Check that the backend is running.");
+        return;
+      }
+
+      let data: {
+        success?: boolean;
+        message?: string;
+        access_token?: string;
+        refresh_token?: string;
+        user?: { name: string; email: string };
+      } = {};
+
+      try {
+        data = await res.json();
+      } catch {
+        setError("Invalid response from server. Please try again.");
+        return;
+      }
 
       if (!res.ok || !data.success) {
         setError(data.message || "Invalid credentials.");

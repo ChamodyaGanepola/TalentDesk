@@ -25,6 +25,7 @@ app.add_middleware(
         "https://machine-thieving-rural.ngrok-free.dev",
         "https://talent-desk-inky.vercel.app",
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

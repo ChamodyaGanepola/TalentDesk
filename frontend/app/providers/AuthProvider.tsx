@@ -41,16 +41,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let active = true;
 
     async function bootstrap() {
-      const cached = getStoredUser();
-      if (cached) {
-        setUser(cached);
+      try {
+        const cached = getStoredUser();
+        if (cached) {
+          setUser(cached);
+        }
+
+        const verified = await fetchCurrentUser();
+        if (!active) return;
+
+        setUser(verified);
+      } catch {
+        if (!active) return;
+        setUser(getStoredUser());
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
       }
-
-      const verified = await fetchCurrentUser();
-      if (!active) return;
-
-      setUser(verified);
-      setLoading(false);
     }
 
     void bootstrap();

@@ -1,3 +1,5 @@
+import { apiFetch, apiHeaders, getApiBase } from "@/app/lib/api";
+
 export type AuthUser = {
   name: string;
   email: string;
@@ -7,11 +9,6 @@ const ACCESS_TOKEN_KEY = "access_token";
 const REFRESH_TOKEN_KEY = "refresh_token";
 const USER_KEY = "user";
 const REMEMBER_EMAIL_KEY = "remember_email";
-
-const API = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(
-  /\/$/,
-  ""
-);
 
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -70,10 +67,7 @@ export function clearRememberedEmail(): void {
 }
 
 export function getAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const headers: Record<string, string> = {
-    "ngrok-skip-browser-warning": "true",
-    ...extra,
-  };
+  const headers = apiHeaders(extra);
 
   const token = getAccessToken();
   if (token) {
@@ -86,21 +80,24 @@ export function getAuthHeaders(extra: Record<string, string> = {}): Record<strin
 let refreshPromise: Promise<boolean> | null = null;
 
 export async function refreshAccessToken(): Promise<boolean> {
+  const api = getApiBase();
   const refreshToken = getRefreshToken();
-  if (!refreshToken) return false;
+  if (!api || !refreshToken) return false;
 
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
     try {
-      const res = await fetch(`${API}/auth/refresh`, {
+      const res = await apiFetch("/auth/refresh", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "ngrok-skip-browser-warning": "true",
-        },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
+
+      if (!res) {
+        clearSession();
+        return false;
+      }
 
       const data = await res.json();
       if (!res.ok || !data.success || !data.access_token || !data.refresh_token) {
@@ -122,51 +119,65 @@ export async function refreshAccessToken(): Promise<boolean> {
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser | null> {
+  const api = getApiBase();
   const token = getAccessToken();
-  if (!token) return null;
+  if (!api || !token) return null;
 
-  let res = await fetch(`${API}/auth/me`, {
-    headers: getAuthHeaders(),
-  });
+  try {
+    let res = await apiFetch("/auth/me", {
+      headers: getAuthHeaders(),
+    });
 
-  if (res.status === 401) {
-    const refreshed = await refreshAccessToken();
-    if (!refreshed) {
+    if (!res) {
+      return getStoredUser();
+    }
+
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        clearSession();
+        return null;
+      }
+
+      res = await apiFetch("/auth/me", {
+        headers: getAuthHeaders(),
+      });
+      if (!res) {
+        return getStoredUser();
+      }
+    }
+
+    if (!res.ok) {
       clearSession();
       return null;
     }
 
-    res = await fetch(`${API}/auth/me`, {
-      headers: getAuthHeaders(),
-    });
-  }
+    const data = await res.json();
+    if (!data?.user) {
+      clearSession();
+      return null;
+    }
 
-  if (!res.ok) {
-    clearSession();
-    return null;
-  }
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+      setSession(getAccessToken()!, refreshToken, data.user);
+    }
 
-  const data = await res.json();
-  if (!data?.user) {
-    clearSession();
-    return null;
+    return data.user as AuthUser;
+  } catch {
+    // Backend unreachable or network error — don't crash the app.
+    return getStoredUser();
   }
-
-  const refreshToken = getRefreshToken();
-  if (refreshToken) {
-    setSession(getAccessToken()!, refreshToken, data.user);
-  }
-
-  return data.user as AuthUser;
 }
 
 export async function logoutSession(): Promise<void> {
+  const api = getApiBase();
   const accessToken = getAccessToken();
   const refreshToken = getRefreshToken();
 
-  if (accessToken) {
+  if (api && accessToken) {
     try {
-      await fetch(`${API}/auth/logout`, {
+      await apiFetch("/auth/logout", {
         method: "POST",
         headers: getAuthHeaders({
           "Content-Type": "application/json",
@@ -181,5 +192,4 @@ export async function logoutSession(): Promise<void> {
   clearSession();
 }
 
-// Backward compatibility
 export const getToken = getAccessToken;

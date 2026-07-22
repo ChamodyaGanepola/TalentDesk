@@ -1,11 +1,12 @@
+import { apiFetch, getApiBase } from "@/app/lib/api";
 import { getAuthHeaders } from "@/app/lib/auth";
-
-const API = process.env.NEXT_PUBLIC_API_URL;
 
 type MastersData = {
   skills: string[];
   qualifications: string[];
 };
+
+const EMPTY_MASTERS: MastersData = { skills: [], qualifications: [] };
 
 let cache: MastersData | null = null;
 let inflight: Promise<MastersData> | null = null;
@@ -27,22 +28,34 @@ export async function fetchMasters(force = false): Promise<MastersData> {
   if (!force && inflight) return inflight;
 
   inflight = (async () => {
-    const [skillsRes, qualificationsRes] = await Promise.all([
-      fetch(`${API}/skills`, { headers: getAuthHeaders() }),
-      fetch(`${API}/qualifications`, { headers: getAuthHeaders() }),
-    ]);
+    if (!getApiBase()) {
+      return EMPTY_MASTERS;
+    }
 
-    const [skills, qualifications] = await Promise.all([
-      skillsRes.json(),
-      qualificationsRes.json(),
-    ]);
+    try {
+      const [skillsRes, qualificationsRes] = await Promise.all([
+        apiFetch("/skills", { headers: getAuthHeaders() }),
+        apiFetch("/qualifications", { headers: getAuthHeaders() }),
+      ]);
 
-    cache = {
-      skills: skills || [],
-      qualifications: qualifications || [],
-    };
+      if (!skillsRes?.ok || !qualificationsRes?.ok) {
+        return cache ?? EMPTY_MASTERS;
+      }
 
-    return cache;
+      const [skills, qualifications] = await Promise.all([
+        skillsRes.json(),
+        qualificationsRes.json(),
+      ]);
+
+      cache = {
+        skills: skills || [],
+        qualifications: qualifications || [],
+      };
+
+      return cache;
+    } catch {
+      return cache ?? EMPTY_MASTERS;
+    }
   })();
 
   try {
@@ -54,7 +67,9 @@ export async function fetchMasters(force = false): Promise<MastersData> {
 
 export function prefetchMasters(): void {
   if (cache || inflight) return;
-  void fetchMasters();
+  void fetchMasters().catch(() => {
+    // Ignore background prefetch failures.
+  });
 }
 
 export function addSkillToCache(name: string): void {
