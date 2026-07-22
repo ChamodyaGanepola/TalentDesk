@@ -186,12 +186,13 @@ async def upload_cvs(
         # =========================
         db.execute(text("""
             INSERT INTO upload_batches
-            (batch_id, experience_type, experience_value)
-            VALUES (:batch_id, :experience_type, :experience_value)
+            (batch_id, experience_type, experience_value, created_at)
+            VALUES (:batch_id, :experience_type, :experience_value, :created_at)
         """), {
             "batch_id": batch_id,
             "experience_type": experience_type,
-            "experience_value": experience_value
+            "experience_value": experience_value,
+            "created_at": datetime.now(timezone.utc)
         })
 
         # =========================

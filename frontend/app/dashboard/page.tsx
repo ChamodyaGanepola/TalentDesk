@@ -133,17 +133,27 @@ export default function DashboardPage() {
   const redirectedRef = useRef(false);
   const uploadsFetchIdRef = useRef(0);
   const activeBatchIdRef = useRef<string | null>(null);
+  const excelWaitCountRef = useRef(0);
 
   useEffect(() => {
     activeBatchIdRef.current = activeBatchId;
   }, [activeBatchId]);
 
   const selectedBatch = useMemo(() => {
-    if (selectedBatchId === "latest") return batches[0] || null;
+    if (selectedBatchId === "latest") {
+      if (activeBatchId) {
+        return (
+          batches.find((batch) => batch.batch_id === activeBatchId) ||
+          batches[0] ||
+          null
+        );
+      }
+      return batches[0] || null;
+    }
     if (selectedBatchId === "all") return null;
 
     return batches.find((batch) => batch.batch_id === selectedBatchId) || null;
-  }, [batches, selectedBatchId]);
+  }, [batches, selectedBatchId, activeBatchId]);
 
   const filteredUploads = useMemo(() => {
     if (selectedBatchId === "all") {
@@ -151,7 +161,9 @@ export default function DashboardPage() {
     }
 
     if (selectedBatchId === "latest") {
-      const latestBatchId = batches[0]?.batch_id;
+      // Prefer the active upload batch so 1-file and multi-file uploads
+      // both appear immediately, even before batches list refreshes.
+      const latestBatchId = activeBatchId || batches[0]?.batch_id;
 
       if (!latestBatchId) return uploads;
 
@@ -159,7 +171,7 @@ export default function DashboardPage() {
     }
 
     return uploads.filter((file) => file.batch_id === selectedBatchId);
-  }, [uploads, batches, selectedBatchId]);
+  }, [uploads, batches, selectedBatchId, activeBatchId]);
 
   const totalPages = useMemo(() => {
     return Math.max(Math.ceil(filteredUploads.length / perPage), 1);
@@ -297,6 +309,55 @@ export default function DashboardPage() {
     [clearUploadMessageAfterDelay, redirectToResumeViewerAfterDelay]
   );
 
+  const finalizeBatchFlow = useCallback(
+    async (batchId: string, batchFiles: UploadItem[]) => {
+      const hasShortlisted = batchFiles.some(
+        (file) => file.status === "Shortlisted"
+      );
+      const allFailed =
+        batchFiles.length > 0 &&
+        batchFiles.every((file) => file.status === "Failed");
+
+      // Same completion path for 1 CV or many.
+      if (hasShortlisted) {
+        const redirected = await checkExcelAndRedirect(batchId);
+
+        if (redirected) {
+          excelWaitCountRef.current = 0;
+          return true;
+        }
+
+        // Excel may lag briefly after the last CV finishes — keep waiting.
+        excelWaitCountRef.current += 1;
+        if (excelWaitCountRef.current >= 10) {
+          setUploadProcessStatus("completed");
+          clearUploadMessageAfterDelay();
+          redirectToResumeViewerAfterDelay(batchId);
+          excelWaitCountRef.current = 0;
+          return true;
+        }
+
+        return false;
+      }
+
+      excelWaitCountRef.current = 0;
+
+      if (allFailed) {
+        setUploadProcessStatus("failed");
+      } else {
+        setUploadProcessStatus("no_results");
+      }
+
+      clearUploadMessageAfterDelay();
+      return true;
+    },
+    [
+      checkExcelAndRedirect,
+      clearUploadMessageAfterDelay,
+      redirectToResumeViewerAfterDelay,
+    ]
+  );
+
   const checkBatchCompletion = useCallback(async () => {
     if (!activeBatchId || uploadProcessStatus !== "processing") return;
 
@@ -309,7 +370,6 @@ export default function DashboardPage() {
       const allFiles: UploadItem[] = result.data || [];
 
       // Keep list in sync while CVs move Uploaded → Processing → final.
-      // Invalidate in-flight fetchRecentUploads so they can't overwrite this.
       uploadsFetchIdRef.current += 1;
       setUploads(allFiles);
 
@@ -323,24 +383,13 @@ export default function DashboardPage() {
         (file) => file.status === "Uploaded" || file.status === "Processing"
       );
 
-      if (stillProcessing) return;
-
-      const hasShortlisted = batchFiles.some(
-        (file) => file.status === "Shortlisted"
-      );
-
-      const hasFailed = batchFiles.some((file) => file.status === "Failed");
-
-      if (hasShortlisted) {
-        await checkExcelAndRedirect(activeBatchId);
-      } else if (hasFailed) {
-        setUploadProcessStatus("failed");
-        clearUploadMessageAfterDelay();
-      } else {
-        setUploadProcessStatus("no_results");
-        clearUploadMessageAfterDelay();
+      if (stillProcessing) {
+        excelWaitCountRef.current = 0;
+        fetchBatches();
+        return;
       }
 
+      await finalizeBatchFlow(activeBatchId, batchFiles);
       fetchBatches();
       refreshDashboard();
     } catch (error) {
@@ -349,8 +398,7 @@ export default function DashboardPage() {
   }, [
     activeBatchId,
     uploadProcessStatus,
-    checkExcelAndRedirect,
-    clearUploadMessageAfterDelay,
+    finalizeBatchFlow,
     fetchBatches,
     refreshDashboard,
   ]);
@@ -413,10 +461,23 @@ export default function DashboardPage() {
 
           fetchRecentUploads({ silent: true });
           fetchBatches();
+
+          // Drive the same completion flow for 1 or N CVs via polling logic.
+          if (currentBatchId) {
+            checkBatchCompletion();
+          }
           return;
         }
 
         if (data.event === "batch_completed_no_results") {
+          if (
+            data.batch_id &&
+            currentBatchId &&
+            data.batch_id !== currentBatchId
+          ) {
+            return;
+          }
+
           setUploadProcessStatus("no_results");
           fetchRecentUploads({ silent: true });
           fetchBatches();
@@ -440,19 +501,11 @@ export default function DashboardPage() {
           return;
         }
 
-        if (data.event === "batch_completed") {
+        if (data.event === "batch_completed" || data.event === "cv_proceed") {
           fetchRecentUploads({ silent: true });
           fetchBatches();
           refreshDashboard();
-
-          if (data.shortlisted > 0) {
-            const batchId = data.batch_id || currentBatchId;
-
-            if (batchId) {
-              await checkExcelAndRedirect(batchId);
-            }
-          }
-
+          checkBatchCompletion();
           return;
         }
       } catch (error) {
@@ -478,15 +531,18 @@ export default function DashboardPage() {
     refreshDashboard,
     clearUploadMessageAfterDelay,
     redirectToResumeViewerAfterDelay,
-    checkExcelAndRedirect,
+    checkBatchCompletion,
   ]);
 
   useEffect(() => {
     if (!activeBatchId || uploadProcessStatus !== "processing") return;
 
+    // Run immediately so single-CV batches don't wait for the first interval.
+    checkBatchCompletion();
+
     const interval = setInterval(() => {
       checkBatchCompletion();
-    }, 3000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [activeBatchId, uploadProcessStatus, checkBatchCompletion]);
@@ -538,11 +594,12 @@ export default function DashboardPage() {
         onUploadStarted={(batchId) => {
           clearTimers();
           redirectedRef.current = false;
+          excelWaitCountRef.current = 0;
           setActiveBatchId(batchId);
           setSelectedBatchId("latest");
           setPage(1);
           setUploadProcessStatus("processing");
-          fetchRecentUploads();
+          fetchRecentUploads({ silent: true });
           fetchBatches();
           refreshDashboard();
         }}

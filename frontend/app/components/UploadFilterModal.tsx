@@ -153,21 +153,19 @@ export default function UploadFilterModal({
 
       const data = await res.json();
 
-      if (!res.ok || !data.success) {
-        const failedMessage =
-          data.failed_files
-            ?.map((f: FailedFile) => `${f.file}: ${f.error}`)
-            .join("\n") || data.message || "Upload failed.";
-
-        setMessage(failedMessage);
+      // Start screening whenever at least one CV was accepted — even if some
+      // files failed (common in multi-upload). One CV or many uses the same path.
+      if (data.batch_id && Number(data.uploaded || 0) > 0) {
+        onProcessingStart(data.batch_id);
         return;
       }
 
-      if (data.batch_id) {
-        onProcessingStart(data.batch_id);
-      }
+      const failedMessage =
+        data.failed_files
+          ?.map((f: FailedFile) => `${f.file}: ${f.error}`)
+          .join("\n") || data.message || "Upload failed.";
 
-      onClose();
+      setMessage(failedMessage);
     } catch (err) {
       console.error(err);
       setMessage("Server error while uploading.");

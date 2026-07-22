@@ -188,7 +188,7 @@ async def handle_batch_completion(db, batch_id):
             "file": excel_path,
             "message": "Excel file generated successfully"
         })
-    else:
+    elif shortlisted_count == 0:
         await manager.broadcast({
             "event": "batch_completed_no_results",
             "batch_id": batch_id,
@@ -197,6 +197,15 @@ async def handle_batch_completion(db, batch_id):
             "rejected": rejected_count,
             "failed": failed_count,
             "message": "All CVs were processed, but no candidates were shortlisted. No Excel file was generated."
+        })
+    else:
+        # Shortlisted exists but export failed/empty — still signal completion
+        # so 1-CV and multi-CV flows can finish and redirect.
+        await manager.broadcast({
+            "event": "excel_exported",
+            "batch_id": batch_id,
+            "file": None,
+            "message": "Batch completed with shortlisted candidates"
         })
 
 
