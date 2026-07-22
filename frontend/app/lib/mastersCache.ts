@@ -12,6 +12,14 @@ type MastersData = {
 let cache: MastersData | null = null;
 let inflight: Promise<MastersData> | null = null;
 
+export function isMastersCached(): boolean {
+  return cache !== null;
+}
+
+export function isMastersLoading(): boolean {
+  return inflight !== null;
+}
+
 export function getCachedMasters(): MastersData | null {
   return cache;
 }

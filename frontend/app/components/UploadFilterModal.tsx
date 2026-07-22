@@ -23,7 +23,7 @@ import {
 } from "@/app/lib/mastersCache";
 
 type Props = {
-  files: FileList;
+  files: FileList | null;
   onClose: () => void;
   onUploadPending?: () => void;
   onUploadFailed?: () => void;
@@ -102,11 +102,11 @@ export default function UploadFilterModal({
   onProcessingStart,
 }: Props) {
   const { showToast } = useToast();
-  const cached = getCachedMasters();
+  const initialCache = getCachedMasters();
 
-  const [skills, setSkills] = useState<string[]>(cached?.skills ?? []);
+  const [skills, setSkills] = useState<string[]>(initialCache?.skills ?? []);
   const [qualifications, setQualifications] = useState<string[]>(
-    cached?.qualifications ?? []
+    initialCache?.qualifications ?? []
   );
 
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
@@ -124,12 +124,11 @@ export default function UploadFilterModal({
   const [experienceMonths, setExperienceMonths] = useState(0);
 
   const [loading, setLoading] = useState(false);
-  const [skillsLoading, setSkillsLoading] = useState(!cached);
-  const [qualificationsLoading, setQualificationsLoading] = useState(!cached);
+  const [mastersLoading, setMastersLoading] = useState(!initialCache);
   const [message, setMessage] = useState("");
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
 
-  const fileArray = Array.from(files);
+  const fileArray = files ? Array.from(files) : [];
   const totalMonths = yearsMonthsToTotalMonths(
     experienceYears,
     experienceMonths
@@ -161,7 +160,7 @@ export default function UploadFilterModal({
   useEffect(() => {
     let cancelled = false;
 
-    const load = async () => {
+    void (async () => {
       try {
         const data = await fetchMasters();
         if (cancelled) return;
@@ -171,26 +170,18 @@ export default function UploadFilterModal({
         if (cancelled) return;
         console.error(err);
         setMessage("Failed to load skills or qualifications.");
+        showToast("Failed to load filter options.", "error");
       } finally {
         if (!cancelled) {
-          setSkillsLoading(false);
-          setQualificationsLoading(false);
+          setMastersLoading(false);
         }
       }
-    };
-
-    if (cached) {
-      setSkillsLoading(false);
-      setQualificationsLoading(false);
-      return;
-    }
-
-    void load();
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [cached]);
+  }, [showToast]);
 
   const filteredSkills = useMemo(() => {
     const q = skillSearch.trim().toLowerCase();
@@ -271,6 +262,11 @@ export default function UploadFilterModal({
   };
 
   const handleUpload = async () => {
+    if (!files || fileArray.length === 0) {
+      showToast("No files selected.", "error");
+      return;
+    }
+
     setLoading(true);
     setMessage("");
     onUploadPending?.();
@@ -321,7 +317,9 @@ export default function UploadFilterModal({
   };
 
   const filePreview =
-    fileArray.length <= 2
+    fileArray.length === 0
+      ? "Preparing selected files..."
+      : fileArray.length <= 2
       ? fileArray.map((f) => f.name).join(", ")
       : `${fileArray[0].name}, ${fileArray[1].name} +${fileArray.length - 2} more`;
 
@@ -348,13 +346,17 @@ export default function UploadFilterModal({
                 <h2 id="filter-modal-title" className="text-lg font-bold">
                   Screening filters
                 </h2>
+                {mastersLoading && (
+                  <Loader2 size={16} className="animate-spin opacity-90" />
+                )}
               </div>
               <p
                 className="text-sm text-cyan-50 mt-1 truncate"
                 title={filePreview}
               >
-                {fileArray.length} PDF{fileArray.length === 1 ? "" : "s"} ·{" "}
-                {filePreview}
+                {fileArray.length > 0
+                  ? `${fileArray.length} PDF${fileArray.length === 1 ? "" : "s"} · ${filePreview}`
+                  : filePreview}
               </p>
             </div>
             <button
@@ -437,12 +439,14 @@ export default function UploadFilterModal({
             icon={Sparkles}
             title="Skills"
             subtitle={
-              selectedSkills.length
+              mastersLoading
+                ? "Loading options..."
+                : selectedSkills.length
                 ? `${selectedSkills.length} selected`
                 : "Optional — select required skills"
             }
           >
-            {skillsLoading ? (
+            {mastersLoading ? (
               <FilterSectionSkeleton rows={4} />
             ) : (
               <div className="space-y-3">
@@ -514,12 +518,14 @@ export default function UploadFilterModal({
             icon={GraduationCap}
             title="Degree & qualifications"
             subtitle={
-              selectedQualifications.length
+              mastersLoading
+                ? "Loading options..."
+                : selectedQualifications.length
                 ? `${selectedQualifications.length} selected`
                 : "Optional — select required degrees"
             }
           >
-            {qualificationsLoading ? (
+            {mastersLoading ? (
               <FilterSectionSkeleton rows={4} />
             ) : (
               <div className="space-y-3">
@@ -611,7 +617,7 @@ export default function UploadFilterModal({
               <button
                 type="button"
                 onClick={handleUpload}
-                disabled={loading}
+                disabled={loading || !files || fileArray.length === 0}
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-sm font-medium disabled:opacity-50 transition min-w-[140px] justify-center"
               >
                 {loading ? (

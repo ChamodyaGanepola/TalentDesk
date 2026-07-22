@@ -11,9 +11,16 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
+import FilterModalLoadingShell from "@/app/components/FilterModalLoadingShell";
 import UploadFilterModal from "@/app/components/UploadFilterModal";
 import { prefetchMasters } from "@/app/lib/mastersCache";
 import { useToast } from "@/app/components/ui/Toast";
+
+function preloadFilterModal() {
+  prefetchMasters();
+  void import("@/app/components/UploadFilterModal");
+}
 
 type UploadProcessStatus =
   | null
@@ -261,30 +268,39 @@ export default function UploadSection({
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
 
   useEffect(() => {
-    prefetchMasters();
+    preloadFilterModal();
   }, []);
+
+  const closeModal = () => {
+    setOpenModal(false);
+    setSelectedFiles(null);
+  };
 
   const handleFileChange = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
+
+    // Show filter card shell on the very next paint — before file validation.
+    flushSync(() => {
+      setOpenModal(true);
+      setSelectedFiles(null);
+    });
 
     const validFiles = Array.from(fileList).filter((file) =>
       file.name.toLowerCase().endsWith(".pdf")
     );
 
     if (validFiles.length === 0) {
+      setOpenModal(false);
+      setSelectedFiles(null);
       showToast("Only PDF files are allowed.", "error");
       return;
     }
 
     const dataTransfer = new DataTransfer();
+    validFiles.forEach((file) => dataTransfer.items.add(file));
 
-    validFiles.forEach((file) => {
-      dataTransfer.items.add(file);
-    });
-
+    preloadFilterModal();
     setSelectedFiles(dataTransfer.files);
-    prefetchMasters();
-    setOpenModal(true);
   };
 
   const isProcessing = status === "processing";
@@ -321,6 +337,7 @@ export default function UploadSection({
         className="hidden"
         accept=".pdf,application/pdf"
         disabled={isProcessing}
+        onMouseDown={preloadFilterModal}
         onChange={(e) => {
           if (isProcessing) return;
           handleFileChange(e.target.files);
@@ -331,8 +348,8 @@ export default function UploadSection({
       <label
         htmlFor={isProcessing ? undefined : "cvUpload"}
         aria-disabled={isProcessing}
-        onMouseEnter={prefetchMasters}
-        onFocus={prefetchMasters}
+        onMouseEnter={preloadFilterModal}
+        onFocus={preloadFilterModal}
         className={`px-8 py-4 rounded-2xl inline-flex mt-5 transition text-white ${
           isProcessing
             ? "bg-slate-300 cursor-not-allowed pointer-events-none"
@@ -342,13 +359,14 @@ export default function UploadSection({
         {isProcessing ? "Processing CVs..." : "Upload CV Files"}
       </label>
 
+      {openModal && !selectedFiles && (
+        <FilterModalLoadingShell onClose={closeModal} />
+      )}
+
       {openModal && selectedFiles && (
         <UploadFilterModal
           files={selectedFiles}
-          onClose={() => {
-            setOpenModal(false);
-            setSelectedFiles(null);
-          }}
+          onClose={closeModal}
           onUploadPending={() => {
             const count = selectedFiles?.length ?? 0;
             setOpenModal(false);

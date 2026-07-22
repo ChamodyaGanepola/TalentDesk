@@ -89,6 +89,7 @@ export function FilterSectionSkeleton({ rows = 3 }: { rows?: number }) {
           <div key={i} className="h-8 w-20 bg-slate-50 rounded-full" />
         ))}
       </div>
+      <p className="text-xs text-slate-400 pt-1">Loading filter options...</p>
     </div>
   );
 }
