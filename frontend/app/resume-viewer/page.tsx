@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Sidebar from "@/app/components/Sidebar";
 import Topbar from "@/app/components/Topbar";
+import { ExcelListSkeleton } from "@/app/components/Skeletons";
+import { formatSLDateTime } from "@/app/lib/datetime";
 import { Download, Filter } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
@@ -13,23 +15,20 @@ type ExcelFile = {
   created_at?: string | null;
 };
 
-const API = process.env.NEXT_PUBLIC_API_URL;
+const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
 const headers = {
   "ngrok-skip-browser-warning": "true",
 };
 
-function formatDate(value?: string | null) {
-  if (!value) return "-";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleString();
+function getExcelUrl(filePath: string) {
+  const clean = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (clean.startsWith("http://") || clean.startsWith("https://")) return clean;
+  if (clean.startsWith("exports/")) return `${API}/${clean}`;
+  return `${API}/exports/${clean.split("/").pop()}`;
 }
 
-export default function ResumeViewerPage() {
+function ResumeViewerContent() {
   const searchParams = useSearchParams();
   const batchFromUrl = searchParams.get("batch");
 
@@ -41,12 +40,41 @@ export default function ResumeViewerPage() {
   const [perPage] = useState(5);
   const [total, setTotal] = useState(0);
 
-  const totalPages = Math.ceil(total / perPage);
+  const totalPages = Math.ceil(total / perPage) || 1;
 
   const fetchFiles = async (pageNumber: number = 1) => {
     setLoading(true);
 
     try {
+      // When a batch is selected, fetch that export directly so it always shows
+      // (do not filter a paginated global list — newer UTC timestamps sorted after
+      // older local timestamps and the file looked "missing").
+      if (batchFromUrl) {
+        const exportRes = await fetch(
+          `${API}/resume/export/${batchFromUrl}`,
+          { headers }
+        );
+        const exportData = await exportRes.json();
+
+        if (exportData?.excel_file) {
+          setFiles([
+            {
+              id: 0,
+              batch_id: batchFromUrl,
+              file: String(exportData.excel_file).replace(/\\/g, "/"),
+              created_at: exportData.created_at || null,
+            },
+          ]);
+          setTotal(1);
+          setPage(1);
+        } else {
+          setFiles([]);
+          setTotal(0);
+          setPage(1);
+        }
+        return;
+      }
+
       let url = `${API}/batch/excels?page=${pageNumber}&per_page=${perPage}`;
 
       if (filterDate) {
@@ -56,17 +84,9 @@ export default function ResumeViewerPage() {
       const res = await fetch(url, { headers });
       const data = await res.json();
 
-      let excelFiles: ExcelFile[] = data.data || [];
-
-      if (batchFromUrl) {
-        excelFiles = excelFiles.filter(
-          (file) => file.batch_id === batchFromUrl
-        );
-      }
-
-      setFiles(excelFiles);
-      setTotal(batchFromUrl ? excelFiles.length : data.total || 0);
-      setPage(data.page || 1);
+      setFiles(data.data || []);
+      setTotal(data.total || 0);
+      setPage(data.page || pageNumber);
     } catch (err) {
       console.error("Excel fetch failed:", err);
       setFiles([]);
@@ -78,11 +98,12 @@ export default function ResumeViewerPage() {
 
   useEffect(() => {
     fetchFiles(1);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchFromUrl]);
 
   const downloadExcel = async (file: ExcelFile) => {
     try {
-      const res = await fetch(`${API}/${file.file}`, { headers });
+      const res = await fetch(getExcelUrl(file.file), { headers });
 
       if (!res.ok) {
         throw new Error("Download failed");
@@ -93,7 +114,8 @@ export default function ResumeViewerPage() {
 
       const a = document.createElement("a");
       a.href = url;
-      a.download = file.file.split("/").pop() || "resume.xlsx";
+      a.download =
+        file.file.replace(/\\/g, "/").split("/").pop() || "resume.xlsx";
 
       document.body.appendChild(a);
       a.click();
@@ -115,15 +137,13 @@ export default function ResumeViewerPage() {
       <main className="flex-1 p-8">
         <Topbar />
 
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6 text-black">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6 text-slate-900">
           <div>
-            <h1 className="text-xl font-semibold text-slate-900">
-              Exported Excel Files
-            </h1>
+            <h1 className="text-xl font-semibold">Exported Excel Files</h1>
 
             {batchFromUrl && (
               <p className="text-sm text-slate-500 mt-1">
-                Showing Batch: {batchFromUrl}
+                Showing batch: {batchFromUrl}
               </p>
             )}
           </div>
@@ -147,11 +167,9 @@ export default function ResumeViewerPage() {
           </div>
         </div>
 
-        <div className="space-y-5 text-black">
+        <div className="space-y-5 text-slate-900">
           {loading ? (
-            <div className="bg-white rounded-3xl shadow-sm p-6 text-slate-500">
-              Loading Excel files...
-            </div>
+            <ExcelListSkeleton />
           ) : noData ? (
             <div className="bg-white rounded-3xl shadow-sm text-center py-10 text-slate-500">
               No Excel files found.
@@ -164,14 +182,15 @@ export default function ResumeViewerPage() {
               >
                 <div>
                   <h2 className="font-semibold text-lg text-slate-900">
-                    {formatDate(file.created_at)}
+                    {file.file.replace(/\\/g, "/").split("/").pop() ||
+                      "Excel export"}
                   </h2>
 
-                  <p className="text-sm text-gray-500">
-                    Excel Generated: {file.file}
+                  <p className="text-sm text-slate-500">
+                    Generated: {formatSLDateTime(file.created_at)}
                   </p>
 
-                  <p className="text-xs text-gray-400">
+                  <p className="text-xs text-slate-400">
                     Batch: {file.batch_id}
                   </p>
                 </div>
@@ -190,9 +209,9 @@ export default function ResumeViewerPage() {
         </div>
 
         {!batchFromUrl && totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 mt-6 text-black">
+          <div className="flex items-center justify-center gap-2 mt-6 text-slate-900">
             <button
-              disabled={page === 1}
+              disabled={page === 1 || loading}
               onClick={() => fetchFiles(page - 1)}
               className="px-3 py-2 bg-white rounded disabled:opacity-40"
             >
@@ -212,7 +231,7 @@ export default function ResumeViewerPage() {
             ))}
 
             <button
-              disabled={page === totalPages}
+              disabled={page === totalPages || loading}
               onClick={() => fetchFiles(page + 1)}
               className="px-3 py-2 bg-white rounded disabled:opacity-40"
             >
@@ -222,5 +241,19 @@ export default function ResumeViewerPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function ResumeViewerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-100 p-8">
+          <ExcelListSkeleton />
+        </div>
+      }
+    >
+      <ResumeViewerContent />
+    </Suspense>
   );
 }

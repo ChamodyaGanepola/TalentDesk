@@ -45,7 +45,10 @@ export default function Sidebar() {
                 <nav className="p-4 space-y-3">
                     {menu.map((item) => {
                         const Icon = item.icon;
-                        const active = pathname === item.path;
+                        const active =
+                            pathname === item.path ||
+                            (item.path === "/dashboard" &&
+                                pathname.startsWith("/batch-details"));
 
                         return (
                             <Link

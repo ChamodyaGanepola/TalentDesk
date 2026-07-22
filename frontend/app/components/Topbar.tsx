@@ -12,6 +12,7 @@ type User = {
 function getPageTitle(pathname: string) {
   if (pathname === "/dashboard") return "CV Screening Dashboard";
   if (pathname === "/resume-viewer") return "Resume Viewer";
+  if (pathname.startsWith("/batch-details")) return "Batch Details";
   return "Admin Panel";
 }
 

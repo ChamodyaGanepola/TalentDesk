@@ -2,7 +2,11 @@ import os
 import json
 import re
 from openai import OpenAI
-from app.services.utils_experience import calculate_experience
+from app.services.utils_experience import (
+    calculate_experience_months,
+    filter_jobs_and_internships,
+    years_to_months,
+)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -42,6 +46,7 @@ def default_cv_result():
         "email": "",
         "contact_no": "",
         "skills": [],
+        "experience_months": 0,
         "experience_years": 0.0,
         "qualifications": [],
         "profession": "",
@@ -77,6 +82,7 @@ Return JSON ONLY in this format:
   "contact_no": "",
   "skills": [],
   "experience_years": 0.0,
+  "experience_months": 0,
   "qualifications": [],
   "profession": "",
   "internships": []
@@ -90,12 +96,41 @@ RULES:
 - Include skills from work, internships, projects, and technical summary sections.
 - Normalize skills to lowercase.
 - Remove duplicates.
+- IMPORTANT: Treat differently named but equivalent skills as the SAME skill.
+  Always return the most common canonical skill name, and do not list aliases separately.
+  Examples:
+  - js, javascript, java script -> javascript
+  - ts, typescript -> typescript
+  - react, reactjs, react.js, react js -> react
+  - next, nextjs, next.js -> next.js
+  - node, nodejs, node.js -> node.js
+  - vue, vuejs, vue.js -> vue.js
+  - angularjs, angular.js, angular 2+ -> angular
+  - express, expressjs, express.js -> express
+  - csharp, c sharp, c-sharp, .net c# -> c#
+  - dotnet, .net core, asp.net, asp.net core -> .net
+  - postgres, postgresql, postgre sql -> postgresql
+  - mongo, mongodb, mongo db -> mongodb
+  - mssql, sql server, microsoft sql server -> sql server
+  - html5 -> html
+  - css3 -> css
+  - aws, amazon web services -> aws
+  - gcp, google cloud, google cloud platform -> gcp
+  - azure, microsoft azure -> azure
+  - k8s, kubernetes -> kubernetes
+  - ci/cd, cicd -> ci/cd
+  - github actions, gitlab ci -> keep as written if distinct tools, otherwise normalize obvious synonyms
+- If a skill is clearly the same technology with punctuation/spacing/version differences, merge into one canonical name.
+- Prefer short standard industry names over marketing/versioned names (e.g. "react" not "react 18").
 
 2. EXPERIENCE:
 - Do not calculate final experience yourself.
-- Extract real internships and paid jobs only into the internships array.
-- Do not include projects, assignments, academic work, or hackathons as experience.
-- If a direct total experience is clearly written, place it in experience_years, but Python will recalculate using internships/jobs.
+- Extract ONLY real internships and paid/full-time/part-time jobs into the internships array.
+- NEVER include personal projects, academic projects, university projects, assignments, coursework, hackathons, or capstone work in internships.
+- Projects may still contribute skills, but they must NOT appear in internships and must NOT affect experience.
+- Set type to exactly "internship" or "job" for every work entry.
+- If a CV only lists projects and no jobs/internships, leave internships as [] and experience_years/experience_months as 0.
+- Python recalculates total months from internship/job entries only.
 
 3. INTERNSHIPS/JOBS FORMAT:
 [
@@ -141,23 +176,23 @@ OUTPUT:
 
         extracted = json.loads(raw_content)
 
-        internships = extracted.get("internships", [])
-        calculated_exp = calculate_experience(internships)
+        # Only jobs/internships count — drop projects and other non-work items.
+        internships = filter_jobs_and_internships(extracted.get("internships", []))
+        calculated_months = calculate_experience_months(internships)
 
-        # If internships were not detected but CV has direct experience text,
-        # keep direct value as fallback.
-        direct_exp = parse_float(extracted.get("experience_years"))
-        final_exp = calculated_exp if calculated_exp > 0 else direct_exp
+        # Experience months come only from jobs/internships date ranges.
+        final_months = calculated_months
 
         return {
             "name": str(extracted.get("name") or "").strip(),
             "email": str(extracted.get("email") or "").strip(),
             "contact_no": str(extracted.get("contact_no") or "").strip(),
             "skills": clean_list(extracted.get("skills", []), lowercase=True),
-            "experience_years": final_exp,
+            "experience_months": int(final_months),
+            "experience_years": round(final_months / 12, 2),
             "qualifications": clean_list(extracted.get("qualifications", []), lowercase=False),
             "profession": str(extracted.get("profession") or "").strip(),
-            "internships": internships if isinstance(internships, list) else []
+            "internships": internships
         }
 
     except Exception as e:

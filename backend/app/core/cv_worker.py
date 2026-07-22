@@ -2,7 +2,6 @@ import time
 import asyncio
 import traceback
 import fitz
-import re
 
 from sqlalchemy import text
 
@@ -12,6 +11,7 @@ from app.services.vision_ocr import vision_ocr
 from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
 from app.services.export_service import export_batch_shortlisted
+from app.services.utils_experience import years_to_months, months_to_label, months_to_years_float
 from app.ws.manager import manager
 from app.ws.broadcaster import broadcast_stats
 
@@ -19,15 +19,19 @@ from app.ws.broadcaster import broadcast_stats
 # =========================
 # HELPERS
 # =========================
-def parse_experience(value):
-    if not value:
-        return 0.0
+def parse_experience_months(extracted) -> int:
+    if not isinstance(extracted, dict):
+        return years_to_months(extracted)
 
-    try:
-        return float(value)
-    except Exception:
-        match = re.search(r"\d+(\.\d+)?", str(value))
-        return float(match.group()) if match else 0.0
+    if extracted.get("experience_months") is not None:
+        try:
+            months = int(extracted.get("experience_months") or 0)
+            if months > 0:
+                return months
+        except Exception:
+            pass
+
+    return years_to_months(extracted.get("experience_years"))
 
 
 def batch_completed(db, batch_id):
@@ -145,22 +149,74 @@ async def handle_batch_completion(db, batch_id):
     }).fetchone()
 
     excel_path = None
+    excel_generated_at = None
 
     if shortlisted_count > 0:
-        if not existing:
-            excel_path = export_batch_shortlisted(batch_id)
+        print(
+            f"Generating Excel for batch {batch_id}: "
+            f"{shortlisted_count} shortlisted / {total_count} total"
+        )
 
-            if excel_path:
+        try:
+            export_result = export_batch_shortlisted(
+                batch_id,
+                total_cvs=total_count,
+                db=db,
+            )
+        except Exception as export_error:
+            print("Excel export error:", export_error)
+            traceback.print_exc()
+            export_result = None
+
+            # One retry after a short wait (Mongo write lag).
+            try:
+                await asyncio.sleep(1)
+                export_result = export_batch_shortlisted(
+                    batch_id,
+                    total_cvs=total_count,
+                    db=db,
+                )
+            except Exception as retry_error:
+                print("Excel export retry failed:", retry_error)
+                traceback.print_exc()
+                export_result = None
+
+        if export_result:
+            excel_path = export_result["file_path"]
+            excel_generated_at = export_result.get("generated_at")
+
+            if existing:
                 db.execute(text("""
-                    INSERT INTO batch_exports(batch_id, excel_file)
-                    VALUES(:batch_id, :excel_file)
+                    UPDATE batch_exports
+                    SET excel_file=:excel_file, created_at=:created_at
+                    WHERE id=:id
+                """), {
+                    "excel_file": excel_path,
+                    "created_at": excel_generated_at,
+                    "id": existing[0],
+                })
+            else:
+                db.execute(text("""
+                    INSERT INTO batch_exports(batch_id, excel_file, created_at)
+                    VALUES(:batch_id, :excel_file, :created_at)
                 """), {
                     "batch_id": batch_id,
-                    "excel_file": excel_path
+                    "excel_file": excel_path,
+                    "created_at": excel_generated_at,
                 })
-                db.commit()
-        else:
+            db.commit()
+            print(f"Excel saved for batch {batch_id}: {excel_path}")
+        elif existing:
             excel_path = existing[1]
+            print(
+                f"Excel export returned empty for batch {batch_id}; "
+                f"keeping previous file {excel_path}"
+            )
+        else:
+            print(
+                f"ERROR: {shortlisted_count} shortlisted CV(s) but "
+                f"Excel was not generated for batch {batch_id}"
+            )
 
     await manager.broadcast({
         "event": "cv_proceed",
@@ -186,6 +242,10 @@ async def handle_batch_completion(db, batch_id):
             "event": "excel_exported",
             "batch_id": batch_id,
             "file": excel_path,
+            "total": total_count,
+            "shortlisted": shortlisted_count,
+            "rejected": rejected_count,
+            "failed": failed_count,
             "message": "Excel file generated successfully"
         })
     elif shortlisted_count == 0:
@@ -205,6 +265,10 @@ async def handle_batch_completion(db, batch_id):
             "event": "excel_exported",
             "batch_id": batch_id,
             "file": None,
+            "total": total_count,
+            "shortlisted": shortlisted_count,
+            "rejected": rejected_count,
+            "failed": failed_count,
             "message": "Batch completed with shortlisted candidates"
         })
 
@@ -274,11 +338,12 @@ async def cv_worker_loop():
                 extracted = extract_cv_text(raw_text)
                 method = "text_ai"
 
-            cv_exp = parse_experience(extracted.get("experience_years"))
+            cv_exp_months = parse_experience_months(extracted)
             cv_skills = extracted.get("skills", []) or []
             cv_quals = extracted.get("qualifications", []) or []
 
-            print("Extracted Experience:", cv_exp)
+            print("Extracted Experience (months):", cv_exp_months)
+            print("Extracted Experience (label):", months_to_label(cv_exp_months))
             print("Extracted Skills:", cv_skills)
             print("Extracted Qualifications:", cv_quals)
 
@@ -286,7 +351,8 @@ async def cv_worker_loop():
                 cv={
                     "skills": cv_skills,
                     "qualifications": cv_quals,
-                    "experience_years": cv_exp,
+                    "experience_months": cv_exp_months,
+                    "experience_years": months_to_years_float(cv_exp_months),
                 },
                 required_skills=required_skills,
                 required_quals=required_quals,
@@ -314,7 +380,9 @@ async def cv_worker_loop():
                 "skills": list(cv_skills),
                 "qualifications": list(cv_quals),
                 "experience_raw": extracted.get("experience_years"),
-                "experience_years": cv_exp,
+                "experience_months": cv_exp_months,
+                "experience_years": months_to_years_float(cv_exp_months),
+                "experience_label": months_to_label(cv_exp_months),
                 "profession": extracted.get("profession"),
                 "internships": extracted.get("internships", []),
                 "file_name": file_name,

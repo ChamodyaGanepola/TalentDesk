@@ -12,13 +12,22 @@ type UploadProcessStatus =
   | "no_results"
   | "failed";
 
+type CompletionSummary = {
+  total: number;
+  shortlisted: number;
+  rejected: number;
+  failed: number;
+} | null;
+
 type Props = {
   status?: UploadProcessStatus;
+  summary?: CompletionSummary;
   onUploadStarted?: (batchId: string) => void;
 };
 
 export default function UploadSection({
   status = null,
+  summary = null,
   onUploadStarted,
 }: Props) {
   const [openModal, setOpenModal] = useState(false);
@@ -45,6 +54,12 @@ export default function UploadSection({
     setSelectedFiles(dataTransfer.files);
     setOpenModal(true);
   };
+
+  const summaryText = summary
+    ? `${summary.shortlisted} shortlisted, ${summary.rejected} rejected` +
+      (summary.failed ? `, ${summary.failed} failed` : "") +
+      ` (of ${summary.total} CVs)`
+    : null;
 
   return (
     <div className="bg-white rounded-3xl p-10 shadow-sm border border-dashed border-slate-300 text-center">
@@ -102,19 +117,24 @@ export default function UploadSection({
 
       {status === "completed" && (
         <p className="mt-5 text-green-600 font-medium">
-          Processing completed. Redirecting to Resume Viewer...
+          Processing completed
+          {summaryText ? `: ${summaryText}.` : "."} Redirecting to Resume
+          Viewer...
         </p>
       )}
 
       {status === "no_results" && (
         <p className="mt-5 text-red-600 font-medium">
-          Processing completed, but no candidates were shortlisted. No Excel file was generated.
+          Processing completed
+          {summaryText ? `: ${summaryText}.` : "."} No candidates were
+          shortlisted, so no Excel file was generated.
         </p>
       )}
 
       {status === "failed" && (
         <p className="mt-5 text-red-600 font-medium">
-          Processing failed. Please check recent uploads.
+          Processing failed
+          {summaryText ? `: ${summaryText}.` : "."} Please check recent uploads.
         </p>
       )}
     </div>

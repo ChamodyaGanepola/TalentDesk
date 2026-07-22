@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FilterModalSkeleton } from "@/app/components/Skeletons";
+import { yearsMonthsToTotalMonths } from "@/app/lib/datetime";
 
 type Props = {
   files: FileList;
@@ -34,9 +36,11 @@ export default function UploadFilterModal({
   const [newQualification, setNewQualification] = useState("");
 
   const [experienceType, setExperienceType] = useState("minimum");
-  const [experienceValue, setExperienceValue] = useState("1");
+  const [experienceYears, setExperienceYears] = useState(1);
+  const [experienceMonths, setExperienceMonths] = useState(0);
 
   const [loading, setLoading] = useState(false);
+  const [mastersLoading, setMastersLoading] = useState(true);
   const [message, setMessage] = useState("");
 
   const fileArray = Array.from(files);
@@ -46,6 +50,7 @@ export default function UploadFilterModal({
   }, []);
 
   const fetchMasters = async () => {
+    setMastersLoading(true);
     try {
       const [skillsRes, qualificationsRes] = await Promise.all([
         fetch(`${API}/skills`, { headers }),
@@ -60,6 +65,8 @@ export default function UploadFilterModal({
     } catch (err) {
       console.error(err);
       setMessage("Failed to load skills or qualifications.");
+    } finally {
+      setMastersLoading(false);
     }
   };
 
@@ -143,7 +150,13 @@ export default function UploadFilterModal({
       formData.append("skills", JSON.stringify(selectedSkills));
       formData.append("qualifications", JSON.stringify(selectedQualifications));
       formData.append("experience_type", experienceType);
-      formData.append("experience_value", experienceValue);
+      const totalMonths = yearsMonthsToTotalMonths(
+        experienceYears,
+        experienceMonths
+      );
+      formData.append("experience_months", String(totalMonths));
+      // Also send months in experience_value for backend canonical storage.
+      formData.append("experience_value", String(totalMonths));
 
       const res = await fetch(`${API}/upload/cvs`, {
         method: "POST",
@@ -197,7 +210,7 @@ export default function UploadFilterModal({
           <div className="bg-slate-50 p-4 rounded-2xl">
             <h3 className="font-semibold mb-3">Experience</h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <select
                 value={experienceType}
                 onChange={(e) => setExperienceType(e.target.value)}
@@ -208,18 +221,36 @@ export default function UploadFilterModal({
                 <option value="exact">Exact</option>
               </select>
 
-              <input
-                type="number"
-                min="0"
-                step="0.1"
-                value={experienceValue}
-                onChange={(e) => setExperienceValue(e.target.value)}
+              <select
+                value={experienceYears}
+                onChange={(e) => setExperienceYears(Number(e.target.value))}
                 className="bg-white p-2 rounded-xl border border-slate-200"
-                placeholder="Experience years"
-              />
+              >
+                {Array.from({ length: 31 }, (_, i) => (
+                  <option key={i} value={i}>
+                    {i} {i === 1 ? "year" : "years"}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={experienceMonths}
+                onChange={(e) => setExperienceMonths(Number(e.target.value))}
+                className="bg-white p-2 rounded-xl border border-slate-200"
+              >
+                {Array.from({ length: 12 }, (_, i) => (
+                  <option key={i} value={i}>
+                    {i} {i === 1 ? "month" : "months"}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
+          {mastersLoading ? (
+            <FilterModalSkeleton />
+          ) : (
+            <>
           <div className="bg-slate-50 p-4 rounded-2xl">
             <h3 className="font-semibold mb-3">Skills</h3>
 
@@ -290,6 +321,8 @@ export default function UploadFilterModal({
               ))}
             </div>
           </div>
+            </>
+          )}
         </div>
 
         <div className="p-5 flex justify-end gap-3 border-t border-slate-100">

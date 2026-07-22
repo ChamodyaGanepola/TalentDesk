@@ -2,6 +2,16 @@
 
 import UploadSection from "@/app/components/UploadSection";
 import StatCard from "@/app/components/StatCards";
+import {
+  StatCardsSkeleton,
+  UploadListSkeleton,
+} from "@/app/components/Skeletons";
+import {
+  formatSLDate,
+  formatSLDateTime,
+  formatSLTime,
+  toSLDateKey,
+} from "@/app/lib/datetime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -59,26 +69,6 @@ const headers = {
   "ngrok-skip-browser-warning": "true",
 };
 
-function UploadSkeleton() {
-  return (
-    <div className="space-y-4">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div
-          key={i}
-          className="flex items-center justify-between border rounded-2xl px-5 py-4 animate-pulse"
-        >
-          <div>
-            <div className="h-4 w-40 bg-slate-200 rounded mb-2" />
-            <div className="h-3 w-24 bg-slate-200 rounded" />
-          </div>
-
-          <div className="h-6 w-20 bg-slate-200 rounded" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function getStatusClass(status: UploadStatus) {
   if (status === "Shortlisted") return "bg-green-100 text-green-700";
   if (status === "Rejected") return "bg-red-100 text-red-700";
@@ -88,14 +78,27 @@ function getStatusClass(status: UploadStatus) {
   return "bg-cyan-100 text-cyan-700";
 }
 
-function formatDate(value: string | null) {
-  if (!value) return "-";
+function getBatchNumberOnDate(batch: BatchItem, allBatches: BatchItem[]) {
+  const key = toSLDateKey(batch.created_at);
+  if (!key) return 1;
 
-  const date = new Date(value);
+  const sameDay = [...allBatches]
+    .filter((item) => toSLDateKey(item.created_at) === key)
+    .sort((a, b) => {
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return aTime - bTime;
+    });
 
-  if (Number.isNaN(date.getTime())) return value;
+  const index = sameDay.findIndex((item) => item.batch_id === batch.batch_id);
+  return index >= 0 ? index + 1 : 1;
+}
 
-  return date.toLocaleString();
+function formatBatchLabel(batch: BatchItem, allBatches: BatchItem[]) {
+  const batchNo = getBatchNumberOnDate(batch, allBatches);
+  return `${formatSLDate(batch.created_at)} | ${formatSLTime(
+    batch.created_at
+  )} | ${batch.total} CVs | Batch-${batchNo}`;
 }
 
 export default function DashboardPage() {
@@ -105,15 +108,24 @@ export default function DashboardPage() {
   const perPage = 5;
 
   const [uploads, setUploads] = useState<UploadItem[]>([]);
-  const [loadingUploads, setLoadingUploads] = useState(false);
+  const [loadingUploads, setLoadingUploads] = useState(true);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [loadingBatches, setLoadingBatches] = useState(true);
 
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string>("latest");
+  const [filterDate, setFilterDate] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [uploadProcessStatus, setUploadProcessStatus] =
     useState<UploadProcessStatus>(null);
+  const [completionSummary, setCompletionSummary] = useState<{
+    total: number;
+    shortlisted: number;
+    rejected: number;
+    failed: number;
+  } | null>(null);
 
   const [stats, setStats] = useState<Stats>({
     total: 0,
@@ -139,39 +151,78 @@ export default function DashboardPage() {
     activeBatchIdRef.current = activeBatchId;
   }, [activeBatchId]);
 
+  const dateFilteredBatches = useMemo(() => {
+    if (!filterDate) return batches;
+    return batches.filter((batch) => toSLDateKey(batch.created_at) === filterDate);
+  }, [batches, filterDate]);
+
   const selectedBatch = useMemo(() => {
+    const source = dateFilteredBatches;
+
     if (selectedBatchId === "latest") {
-      if (activeBatchId) {
+      // While actively processing, keep focus on the upload batch.
+      // Otherwise always default to the newest batch by date.
+      if (uploadProcessStatus === "processing" && activeBatchId) {
         return (
-          batches.find((batch) => batch.batch_id === activeBatchId) ||
-          batches[0] ||
+          source.find((batch) => batch.batch_id === activeBatchId) ||
+          source[0] ||
           null
         );
       }
-      return batches[0] || null;
+      return source[0] || null;
     }
     if (selectedBatchId === "all") return null;
 
-    return batches.find((batch) => batch.batch_id === selectedBatchId) || null;
-  }, [batches, selectedBatchId, activeBatchId]);
+    return source.find((batch) => batch.batch_id === selectedBatchId) || null;
+  }, [
+    dateFilteredBatches,
+    selectedBatchId,
+    activeBatchId,
+    uploadProcessStatus,
+  ]);
 
   const filteredUploads = useMemo(() => {
+    const batchIdsOnDate = filterDate
+      ? new Set(dateFilteredBatches.map((batch) => batch.batch_id))
+      : null;
+
+    const inDate = (file: UploadItem) => {
+      if (!batchIdsOnDate) {
+        if (!filterDate) return true;
+        return toSLDateKey(file.created_at) === filterDate;
+      }
+      return batchIdsOnDate.has(file.batch_id);
+    };
+
     if (selectedBatchId === "all") {
-      return uploads;
+      return uploads.filter(inDate);
     }
 
     if (selectedBatchId === "latest") {
-      // Prefer the active upload batch so 1-file and multi-file uploads
-      // both appear immediately, even before batches list refreshes.
-      const latestBatchId = activeBatchId || batches[0]?.batch_id;
+      const latestBatchId =
+        uploadProcessStatus === "processing" && activeBatchId
+          ? activeBatchId
+          : dateFilteredBatches[0]?.batch_id || batches[0]?.batch_id;
 
-      if (!latestBatchId) return uploads;
+      if (!latestBatchId) return uploads.filter(inDate);
 
-      return uploads.filter((file) => file.batch_id === latestBatchId);
+      return uploads.filter(
+        (file) => file.batch_id === latestBatchId && inDate(file)
+      );
     }
 
-    return uploads.filter((file) => file.batch_id === selectedBatchId);
-  }, [uploads, batches, selectedBatchId, activeBatchId]);
+    return uploads.filter(
+      (file) => file.batch_id === selectedBatchId && inDate(file)
+    );
+  }, [
+    uploads,
+    batches,
+    dateFilteredBatches,
+    selectedBatchId,
+    activeBatchId,
+    filterDate,
+    uploadProcessStatus,
+  ]);
 
   const totalPages = useMemo(() => {
     return Math.max(Math.ceil(filteredUploads.length / perPage), 1);
@@ -204,6 +255,7 @@ export default function DashboardPage() {
     clearMessageTimerRef.current = setTimeout(() => {
       setUploadProcessStatus(null);
       setActiveBatchId(null);
+      setCompletionSummary(null);
       redirectedRef.current = false;
     }, 30000);
   }, []);
@@ -233,6 +285,8 @@ export default function DashboardPage() {
       setBatches(data || []);
     } catch (err) {
       console.error("Batch fetch error:", err);
+    } finally {
+      setLoadingBatches(false);
     }
   }, []);
 
@@ -281,6 +335,8 @@ export default function DashboardPage() {
       });
     } catch (err) {
       console.error("Stats refresh error:", err);
+    } finally {
+      setLoadingStats(false);
     }
   }, []);
 
@@ -311,12 +367,18 @@ export default function DashboardPage() {
 
   const finalizeBatchFlow = useCallback(
     async (batchId: string, batchFiles: UploadItem[]) => {
-      const hasShortlisted = batchFiles.some(
-        (file) => file.status === "Shortlisted"
-      );
+      const summary = {
+        total: batchFiles.length,
+        shortlisted: batchFiles.filter((f) => f.status === "Shortlisted").length,
+        rejected: batchFiles.filter((f) => f.status === "Rejected").length,
+        failed: batchFiles.filter((f) => f.status === "Failed").length,
+      };
+
+      setCompletionSummary(summary);
+
+      const hasShortlisted = summary.shortlisted > 0;
       const allFailed =
-        batchFiles.length > 0 &&
-        batchFiles.every((file) => file.status === "Failed");
+        batchFiles.length > 0 && summary.failed === batchFiles.length;
 
       // Same completion path for 1 CV or many.
       if (hasShortlisted) {
@@ -344,11 +406,17 @@ export default function DashboardPage() {
 
       if (allFailed) {
         setUploadProcessStatus("failed");
-      } else {
-        setUploadProcessStatus("no_results");
+        clearUploadMessageAfterDelay();
+        return true;
       }
 
+      // Rejected-only (or mixed rejected) batches: show counts and still
+      // redirect to Resume Viewer so the flow always finishes.
+      setUploadProcessStatus(
+        summary.rejected > 0 ? "completed" : "no_results"
+      );
       clearUploadMessageAfterDelay();
+      redirectToResumeViewerAfterDelay(batchId);
       return true;
     },
     [
@@ -478,11 +546,24 @@ export default function DashboardPage() {
             return;
           }
 
-          setUploadProcessStatus("no_results");
+          setCompletionSummary({
+            total: data.total || 0,
+            shortlisted: data.shortlisted || 0,
+            rejected: data.rejected || 0,
+            failed: data.failed || 0,
+          });
+          setUploadProcessStatus(
+            (data.rejected || 0) > 0 ? "completed" : "no_results"
+          );
           fetchRecentUploads({ silent: true });
           fetchBatches();
           refreshDashboard();
           clearUploadMessageAfterDelay();
+
+          const batchId = data.batch_id || currentBatchId;
+          if (batchId) {
+            redirectToResumeViewerAfterDelay(batchId);
+          }
           return;
         }
 
@@ -490,6 +571,18 @@ export default function DashboardPage() {
           const batchId = data.batch_id || currentBatchId;
 
           if (batchId) {
+            if (
+              typeof data.shortlisted === "number" ||
+              typeof data.rejected === "number"
+            ) {
+              setCompletionSummary({
+                total: data.total || 0,
+                shortlisted: data.shortlisted || 0,
+                rejected: data.rejected || 0,
+                failed: data.failed || 0,
+              });
+            }
+
             setUploadProcessStatus("completed");
             fetchRecentUploads({ silent: true });
             fetchBatches();
@@ -502,6 +595,12 @@ export default function DashboardPage() {
         }
 
         if (data.event === "batch_completed" || data.event === "cv_proceed") {
+          setCompletionSummary({
+            total: data.total || 0,
+            shortlisted: data.shortlisted || 0,
+            rejected: data.rejected || 0,
+            failed: data.failed || 0,
+          });
           fetchRecentUploads({ silent: true });
           fetchBatches();
           refreshDashboard();
@@ -555,6 +654,9 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8 text-slate-900">
+      {loadingStats ? (
+        <StatCardsSkeleton />
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-6">
         <StatCard title="Total CVs" value={stats.total} />
 
@@ -588,15 +690,19 @@ export default function DashboardPage() {
           color="text-red-700"
         />
       </div>
+      )}
 
       <UploadSection
         status={uploadProcessStatus}
+        summary={completionSummary}
         onUploadStarted={(batchId) => {
           clearTimers();
           redirectedRef.current = false;
           excelWaitCountRef.current = 0;
+          setCompletionSummary(null);
           setActiveBatchId(batchId);
           setSelectedBatchId("latest");
+          setFilterDate("");
           setPage(1);
           setUploadProcessStatus("processing");
           fetchRecentUploads({ silent: true });
@@ -612,7 +718,7 @@ export default function DashboardPage() {
 
             {selectedBatch && (
               <p className="text-sm text-slate-500 mt-1">
-                Selected batch: {selectedBatch.total} CVs,{" "}
+                Selected: {formatBatchLabel(selectedBatch, batches)} —{" "}
                 {selectedBatch.shortlisted} shortlisted,{" "}
                 {selectedBatch.rejected} rejected
               </p>
@@ -621,12 +727,38 @@ export default function DashboardPage() {
             {selectedBatchId === "all" && (
               <p className="text-sm text-slate-500 mt-1">
                 Showing all uploaded CVs
+                {filterDate ? ` on ${filterDate}` : ""}
               </p>
             )}
           </div>
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <div ref={dropdownRef} className="relative w-full sm:w-80">
+            <input
+              type="date"
+              value={filterDate}
+              onChange={(e) => {
+                setFilterDate(e.target.value);
+                setSelectedBatchId("latest");
+                setPage(1);
+              }}
+              className="border border-slate-300 rounded-xl px-4 py-2 text-sm bg-white text-slate-700"
+              title="Filter by date"
+            />
+
+            {filterDate && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterDate("");
+                  setPage(1);
+                }}
+                className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900"
+              >
+                Clear date
+              </button>
+            )}
+
+            <div ref={dropdownRef} className="relative w-full sm:w-96">
               <button
                 type="button"
                 onClick={() => setDropdownOpen((prev) => !prev)}
@@ -634,18 +766,14 @@ export default function DashboardPage() {
               >
                 <span className="truncate">
                   {selectedBatchId === "latest"
-                    ? "Latest Batch"
+                    ? selectedBatch
+                      ? `Latest — ${formatBatchLabel(selectedBatch, batches)}`
+                      : "Latest Batch"
                     : selectedBatchId === "all"
                     ? "All Batches"
                     : selectedBatch
-                    ? `${selectedBatch.total} CVs - ${
-                        selectedBatch.created_at
-                          ? new Date(
-                              selectedBatch.created_at
-                            ).toLocaleString()
-                          : "-"
-                      }`
-                    : "Select Batch"}
+                    ? formatBatchLabel(selectedBatch, batches)
+                    : "Select date & time"}
                 </span>
 
                 <span className="text-slate-400 ml-2">▼</span>
@@ -677,44 +805,52 @@ export default function DashboardPage() {
                     All Batches
                   </button>
 
-                  {batches.map((batch, index) => (
-                    <button
-                      key={batch.batch_id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedBatchId(batch.batch_id);
-                        setPage(1);
-                        setDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50 border-t"
-                    >
-                      <div className="font-medium">
-                        Batch {index + 1} - {batch.total} CVs
-                      </div>
+                  {dateFilteredBatches.length === 0 ? (
+                    <div className="px-4 py-3 text-sm text-slate-500 border-t">
+                      No batches{filterDate ? ` on ${filterDate}` : ""}.
+                    </div>
+                  ) : (
+                    dateFilteredBatches.map((batch) => (
+                      <button
+                        key={batch.batch_id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedBatchId(batch.batch_id);
+                          setPage(1);
+                          setDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-sm border-t ${
+                          selectedBatch?.batch_id === batch.batch_id
+                            ? "bg-cyan-50 text-cyan-800"
+                            : "hover:bg-cyan-50"
+                        }`}
+                      >
+                        <div className="font-medium">
+                          {formatBatchLabel(batch, batches)}
+                          {dateFilteredBatches[0]?.batch_id === batch.batch_id
+                            ? " · Latest"
+                            : ""}
+                        </div>
 
-                      <div className="text-xs text-slate-500">
-                        {batch.shortlisted} shortlisted, {batch.rejected}{" "}
-                        rejected
-                      </div>
-
-                      <div className="text-xs text-slate-400">
-                        {batch.created_at
-                          ? new Date(batch.created_at).toLocaleString()
-                          : "-"}
-                      </div>
-                    </button>
-                  ))}
+                        <div className="text-xs text-slate-500">
+                          {batch.shortlisted} shortlisted, {batch.rejected}{" "}
+                          rejected
+                        </div>
+                      </button>
+                    ))
+                  )}
                 </div>
               )}
             </div>
 
-            {selectedBatchId !== "all" && batches.length > 0 && (
+            {selectedBatchId !== "all" && dateFilteredBatches.length > 0 && (
               <button
                 type="button"
                 onClick={() => {
                   const batchId =
                     selectedBatchId === "latest"
-                      ? batches[0]?.batch_id
+                      ? selectedBatch?.batch_id ||
+                        dateFilteredBatches[0]?.batch_id
                       : selectedBatchId;
 
                   if (batchId) {
@@ -729,8 +865,8 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {loadingUploads ? (
-          <UploadSkeleton />
+        {loadingUploads || loadingBatches ? (
+          <UploadListSkeleton />
         ) : filteredUploads.length === 0 ? (
           <div className="text-center py-10 text-slate-500">
             No uploads found.
@@ -753,7 +889,7 @@ export default function DashboardPage() {
                   </a>
 
                   <p className="text-sm text-slate-500">
-                    {formatDate(file.created_at)}
+                    {formatSLDateTime(file.created_at)}
                   </p>
                 </div>
 

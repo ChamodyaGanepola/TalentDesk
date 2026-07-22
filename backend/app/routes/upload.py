@@ -25,6 +25,70 @@ MAX_FILE_SIZE_MB = 20
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 
+from app.services.utils_experience import (
+    months_to_label,
+    months_to_years_float,
+    normalize_requirement_months,
+)
+
+
+def serialize_batch_experience(experience_value):
+    """experience_value in DB is months. Expose months + display label."""
+    months = normalize_requirement_months(experience_value)
+    return {
+        "experience_months": months,
+        "experience_value": months,  # months (canonical)
+        "experience_label": months_to_label(months),
+        "experience_years": months_to_years_float(months),
+    }
+
+
+_experience_migrated = False
+
+
+def ensure_experience_stored_as_months(db: Session):
+    """
+    One-time: older rows stored years as a float (<= ~40).
+    Convert those to months so matching/display stay consistent.
+    """
+    global _experience_migrated
+    if _experience_migrated:
+        return
+
+    try:
+        row = db.execute(text("""
+            SELECT
+                COALESCE(MAX(experience_value), 0) AS max_value,
+                COUNT(*) AS total
+            FROM upload_batches
+        """)).mappings().first()
+
+        max_value = float(row["max_value"] or 0)
+        total = int(row["total"] or 0)
+
+        # Already using months if any requirement is clearly > 40 months,
+        # or there is nothing to migrate.
+        if total == 0 or max_value > 40:
+            _experience_migrated = True
+            return
+
+        db.execute(text("""
+            UPDATE upload_batches
+            SET experience_value = ROUND(experience_value * 12)
+            WHERE experience_value IS NOT NULL
+        """))
+        db.commit()
+        print("Migrated upload_batches.experience_value from years to months")
+    except Exception as e:
+        print("Experience months migration skipped:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    _experience_migrated = True
+
+
 # =========================
 # HELPERS
 # =========================
@@ -155,6 +219,7 @@ async def upload_cvs(
     qualifications: str = Form("[]"),
     experience_type: str = Form("minimum"),
     experience_value: float = Form(0.0),
+    experience_months: int | None = Form(None),
     db: Session = Depends(get_db)
 ):
     uploaded_files = []
@@ -178,9 +243,20 @@ async def upload_cvs(
             "message": "No files uploaded"
         }
 
+    # Canonical storage unit: months.
+    # Prefer experience_months from the updated frontend.
+    if experience_months is not None:
+        stored_months = max(int(experience_months), 0)
+    else:
+        # Legacy clients sent years as a float in experience_value only.
+        from app.services.utils_experience import years_to_months
+        stored_months = years_to_months(experience_value)
+
     batch_id = str(uuid.uuid4())
 
     try:
+        ensure_experience_stored_as_months(db)
+
         # =========================
         # CREATE BATCH
         # =========================
@@ -191,8 +267,8 @@ async def upload_cvs(
         """), {
             "batch_id": batch_id,
             "experience_type": experience_type,
-            "experience_value": experience_value,
-            "created_at": datetime.now(timezone.utc)
+            "experience_value": stored_months,
+            "created_at": datetime.now(timezone.utc).replace(tzinfo=None)
         })
 
         # =========================
@@ -279,7 +355,7 @@ async def upload_cvs(
                     "batch_id": batch_id,
                     "file_name": original_name,
                     "file_url": file_path,
-                    "created_at": datetime.now(timezone.utc)
+                    "created_at": datetime.now(timezone.utc).replace(tzinfo=None)
                 })
 
                 uploaded_files.append(original_name)
@@ -432,7 +508,7 @@ def get_shortlisted(batch_id: str, db: Session = Depends(get_db)):
 @router.get("/resume/export/{batch_id}")
 def get_export(batch_id: str, db: Session = Depends(get_db)):
     row = db.execute(text("""
-        SELECT excel_file
+        SELECT excel_file, created_at
         FROM batch_exports
         WHERE batch_id = :batch_id
         ORDER BY id DESC
@@ -441,7 +517,72 @@ def get_export(batch_id: str, db: Session = Depends(get_db)):
         "batch_id": batch_id
     }).mappings().first()
 
-    return row or {"excel_file": None}
+    if not row:
+        return {"excel_file": None, "created_at": None}
+
+    return {
+        "excel_file": row["excel_file"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+@router.post("/resume/export/{batch_id}/regenerate")
+def regenerate_export(batch_id: str, db: Session = Depends(get_db)):
+    from app.services.export_service import export_batch_shortlisted
+
+    total_count = db.execute(text("""
+        SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
+    """), {"batch_id": batch_id}).scalar() or 0
+
+    export_result = export_batch_shortlisted(
+        batch_id,
+        total_cvs=total_count,
+        db=db,
+    )
+
+    if not export_result:
+        return {
+            "success": False,
+            "message": "No shortlisted candidates to export",
+            "excel_file": None,
+        }
+
+    existing = db.execute(text("""
+        SELECT id FROM batch_exports
+        WHERE batch_id = :batch_id
+        ORDER BY id DESC
+        LIMIT 1
+    """), {"batch_id": batch_id}).fetchone()
+
+    if existing:
+        db.execute(text("""
+            UPDATE batch_exports
+            SET excel_file=:excel_file, created_at=:created_at
+            WHERE id=:id
+        """), {
+            "excel_file": export_result["file_path"],
+            "created_at": export_result["generated_at"],
+            "id": existing[0],
+        })
+    else:
+        db.execute(text("""
+            INSERT INTO batch_exports(batch_id, excel_file, created_at)
+            VALUES(:batch_id, :excel_file, :created_at)
+        """), {
+            "batch_id": batch_id,
+            "excel_file": export_result["file_path"],
+            "created_at": export_result["generated_at"],
+        })
+
+    db.commit()
+
+    return {
+        "success": True,
+        "excel_file": export_result["file_path"],
+        "excel_name": export_result["file_name"],
+        "created_at": export_result["generated_at"].isoformat(),
+        "generated_at_sl": export_result.get("generated_at_sl"),
+    }
 
 
 # =========================
@@ -452,6 +593,7 @@ def get_excels(
     page: int = 1,
     per_page: int = 10,
     date: str = Query(None),
+    batch_id: str = Query(None),
     db: Session = Depends(get_db)
 ):
     page = max(page, 1)
@@ -463,29 +605,42 @@ def get_excels(
         "offset": offset
     }
 
-    sql = """
-        SELECT id, batch_id, excel_file, created_at
-        FROM batch_exports
-    """
+    where_parts = []
 
     if date:
-        sql += " WHERE DATE(created_at) = :date"
+        # Treat stored timestamps as UTC and filter by Sri Lanka calendar day.
+        where_parts.append(
+            "DATE(DATE_ADD(created_at, INTERVAL 330 MINUTE)) = :date"
+        )
         params["date"] = date
 
-    sql += " ORDER BY created_at DESC LIMIT :per_page OFFSET :offset"
+    if batch_id:
+        where_parts.append("batch_id = :batch_id")
+        params["batch_id"] = batch_id
+
+    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    sql = f"""
+        SELECT id, batch_id, excel_file, created_at
+        FROM batch_exports
+        {where_sql}
+        ORDER BY id DESC
+        LIMIT :per_page OFFSET :offset
+    """
 
     rows = db.execute(text(sql), params).mappings().all()
 
-    count_sql = """
+    count_sql = f"""
         SELECT COUNT(*) as count
         FROM batch_exports
+        {where_sql}
     """
 
     count_params = {}
-
     if date:
-        count_sql += " WHERE DATE(created_at) = :date"
         count_params["date"] = date
+    if batch_id:
+        count_params["batch_id"] = batch_id
 
     total = db.execute(text(count_sql), count_params).mappings().first()["count"]
 
@@ -527,12 +682,14 @@ def all_stats(db: Session = Depends(get_db)):
     }
 @router.get("/upload/batches")
 def get_batches(db: Session = Depends(get_db)):
+    ensure_experience_stored_as_months(db)
+
     rows = db.execute(text("""
         SELECT
             ub.batch_id,
             ub.experience_type,
             ub.experience_value,
-            ub.created_at,
+            COALESCE(ub.created_at, MIN(u.created_at)) AS created_at,
             COUNT(u.id) AS total,
             SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
             SUM(CASE WHEN u.status='Processing' THEN 1 ELSE 0 END) AS processing,
@@ -542,14 +699,14 @@ def get_batches(db: Session = Depends(get_db)):
         FROM upload_batches ub
         LEFT JOIN uploads u ON u.batch_id = ub.batch_id
         GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.created_at
-        ORDER BY ub.created_at DESC
+        ORDER BY COALESCE(ub.created_at, MIN(u.created_at)) DESC
     """)).mappings().all()
 
     return [
         {
             "batch_id": r["batch_id"],
             "experience_type": r["experience_type"],
-            "experience_value": r["experience_value"],
+            **serialize_batch_experience(r["experience_value"]),
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "total": r["total"] or 0,
             "pending": r["pending"] or 0,
@@ -559,19 +716,21 @@ def get_batches(db: Session = Depends(get_db)):
             "failed": r["failed"] or 0,
         }
         for r in rows
-    ]    
-    
- # =========================
+    ]
+
+# =========================
 # BATCH DETAILS
 # =========================
 @router.get("/upload/batch/{batch_id}")
 def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
+    ensure_experience_stored_as_months(db)
+
     batch = db.execute(text("""
         SELECT
             ub.batch_id,
             ub.experience_type,
             ub.experience_value,
-            ub.created_at,
+            COALESCE(ub.created_at, MIN(u.created_at)) AS created_at,
             COUNT(u.id) AS total,
             SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
             SUM(CASE WHEN u.status='Processing' THEN 1 ELSE 0 END) AS processing,
@@ -628,7 +787,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
     }).mappings().all()
 
     export_row = db.execute(text("""
-        SELECT excel_file
+        SELECT excel_file, created_at
         FROM batch_exports
         WHERE batch_id = :batch_id
         ORDER BY id DESC
@@ -637,12 +796,19 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
         "batch_id": batch_id
     }).mappings().first()
 
+    excel_file = None
+    excel_created_at = None
+    if export_row and export_row.get("excel_file"):
+        excel_file = str(export_row["excel_file"]).replace("\\", "/")
+        if export_row.get("created_at"):
+            excel_created_at = export_row["created_at"].isoformat()
+
     return {
         "success": True,
         "batch": {
             "batch_id": batch["batch_id"],
             "experience_type": batch["experience_type"],
-            "experience_value": batch["experience_value"],
+            **serialize_batch_experience(batch["experience_value"]),
             "created_at": batch["created_at"].isoformat() if batch["created_at"] else None,
             "total": batch["total"] or 0,
             "pending": batch["pending"] or 0,
@@ -652,7 +818,9 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
             "failed": batch["failed"] or 0,
             "skills": [s["name"] for s in skills],
             "qualifications": [q["name"] for q in qualifications],
-            "excel_file": export_row["excel_file"] if export_row else None
+            "excel_file": excel_file,
+            "excel_name": os.path.basename(excel_file) if excel_file else None,
+            "excel_created_at": excel_created_at,
         },
         "uploads": [
             {
