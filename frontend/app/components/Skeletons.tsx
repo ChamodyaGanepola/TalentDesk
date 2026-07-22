@@ -74,3 +74,21 @@ export function FilterModalSkeleton() {
     </div>
   );
 }
+
+export function FilterSectionSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-3 animate-pulse">
+      <div className="h-10 bg-slate-100 rounded-xl" />
+      <div className="flex flex-wrap gap-2">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="h-8 w-24 bg-slate-100 rounded-full" />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {Array.from({ length: rows + 2 }).map((_, i) => (
+          <div key={i} className="h-8 w-20 bg-slate-50 rounded-full" />
+        ))}
+      </div>
+    </div>
+  );
+}

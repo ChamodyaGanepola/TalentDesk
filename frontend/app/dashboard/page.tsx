@@ -12,6 +12,8 @@ import {
   formatSLTime,
   toSLDateKey,
 } from "@/app/lib/datetime";
+import { prefetchMasters } from "@/app/lib/mastersCache";
+import { useToast } from "@/app/components/ui/Toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Filter } from "lucide-react";
@@ -102,16 +104,52 @@ function formatBatchLabel(batch: BatchItem, allBatches: BatchItem[]) {
   )} | ${batch.total} CVs | Batch-${batchNo}`;
 }
 
+function resolveUploadApiFilters(
+  selectedBatchId: string,
+  filterDate: string,
+  batches: BatchItem[],
+  dateFilteredBatches: BatchItem[],
+  activeBatchId: string | null,
+  uploadProcessStatus: UploadProcessStatus
+): { batch_id?: string; date?: string } {
+  const params: { batch_id?: string; date?: string } = {};
+
+  if (filterDate) {
+    params.date = filterDate;
+  }
+
+  if (selectedBatchId === "all") {
+    return params;
+  }
+
+  if (selectedBatchId === "latest") {
+    const latestBatchId =
+      uploadProcessStatus === "processing" && activeBatchId
+        ? activeBatchId
+        : dateFilteredBatches[0]?.batch_id || batches[0]?.batch_id;
+
+    if (latestBatchId) {
+      params.batch_id = latestBatchId;
+    }
+    return params;
+  }
+
+  params.batch_id = selectedBatchId;
+  return params;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
+  const { showToast } = useToast();
 
-  const [page, setPage] = useState(1);
-  const perPage = 5;
+  const perPage = 10;
 
   const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [loadingUploads, setLoadingUploads] = useState(true);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [loadingBatches, setLoadingBatches] = useState(true);
 
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string>("latest");
@@ -121,6 +159,7 @@ export default function DashboardPage() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
+  const [activeUploadCount, setActiveUploadCount] = useState(0);
   const [uploadProcessStatus, setUploadProcessStatus] =
     useState<UploadProcessStatus>(null);
   const [completionSummary, setCompletionSummary] = useState<{
@@ -148,7 +187,16 @@ export default function DashboardPage() {
   const redirectedRef = useRef(false);
   const uploadsFetchIdRef = useRef(0);
   const activeBatchIdRef = useRef<string | null>(null);
+  const cursorStackRef = useRef<(string | null)[]>([null]);
   const excelWaitCountRef = useRef(0);
+  const fetchRecentUploadsRef = useRef<
+    (opts?: { silent?: boolean; cursor?: string | null }) => Promise<void>
+  >(async () => {});
+  const initialUploadsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    cursorStackRef.current = cursorStack;
+  }, [cursorStack]);
 
   useEffect(() => {
     activeBatchIdRef.current = activeBatchId;
@@ -187,18 +235,20 @@ export default function DashboardPage() {
   const applyFilters = useCallback(() => {
     setFilterDate(draftFilterDate);
     setSelectedBatchId(draftBatchId);
-    setPage(1);
+    setCursorStack([null]);
     setDropdownOpen(false);
-  }, [draftFilterDate, draftBatchId]);
+    showToast("Filters applied.", "success");
+  }, [draftFilterDate, draftBatchId, showToast]);
 
   const clearFilters = useCallback(() => {
     setDraftFilterDate("");
     setDraftBatchId("latest");
     setFilterDate("");
     setSelectedBatchId("latest");
-    setPage(1);
+    setCursorStack([null]);
     setDropdownOpen(false);
-  }, []);
+    showToast("Filters cleared.", "info");
+  }, [showToast]);
 
   const dateFilteredBatches = useMemo(() => {
     if (!filterDate) return batches;
@@ -230,59 +280,84 @@ export default function DashboardPage() {
     uploadProcessStatus,
   ]);
 
-  const filteredUploads = useMemo(() => {
-    const batchIdsOnDate = filterDate
-      ? new Set(dateFilteredBatches.map((batch) => batch.batch_id))
-      : null;
+  const fetchRecentUploads = useCallback(
+    async (opts?: { silent?: boolean; cursor?: string | null }) => {
+      const requestId = ++uploadsFetchIdRef.current;
+      const silent = opts?.silent ?? false;
+      const cursor = opts?.cursor ?? null;
 
-    const inDate = (file: UploadItem) => {
-      if (!batchIdsOnDate) {
-        if (!filterDate) return true;
-        return toSLDateKey(file.created_at) === filterDate;
+      if (!silent) {
+        setLoadingUploads(true);
       }
-      return batchIdsOnDate.has(file.batch_id);
-    };
 
-    if (selectedBatchId === "all") {
-      return uploads.filter(inDate);
-    }
+      try {
+        const filters = resolveUploadApiFilters(
+          selectedBatchId,
+          filterDate,
+          batches,
+          dateFilteredBatches,
+          activeBatchId,
+          uploadProcessStatus
+        );
 
-    if (selectedBatchId === "latest") {
-      const latestBatchId =
-        uploadProcessStatus === "processing" && activeBatchId
-          ? activeBatchId
-          : dateFilteredBatches[0]?.batch_id || batches[0]?.batch_id;
+        const params = new URLSearchParams();
+        params.set("per_page", String(perPage));
+        if (cursor) params.set("cursor", cursor);
+        if (filters.batch_id) params.set("batch_id", filters.batch_id);
+        if (filters.date) params.set("date", filters.date);
 
-      if (!latestBatchId) return uploads.filter(inDate);
+        const res = await fetch(`${API}/upload/recent?${params.toString()}`, {
+          headers,
+        });
 
-      return uploads.filter(
-        (file) => file.batch_id === latestBatchId && inDate(file)
-      );
-    }
+        const result = await res.json();
 
-    return uploads.filter(
-      (file) => file.batch_id === selectedBatchId && inDate(file)
-    );
-  }, [
-    uploads,
-    batches,
-    dateFilteredBatches,
-    selectedBatchId,
-    activeBatchId,
-    filterDate,
-    uploadProcessStatus,
-  ]);
+        if (requestId !== uploadsFetchIdRef.current) return;
 
-  const totalPages = useMemo(() => {
-    return Math.max(Math.ceil(filteredUploads.length / perPage), 1);
-  }, [filteredUploads.length, perPage]);
+        setUploads(result.data || []);
+        setNextCursor(result.next_cursor || null);
+        setHasMore(Boolean(result.has_more));
+      } catch (err) {
+        if (requestId !== uploadsFetchIdRef.current) return;
+        console.error("Recent uploads fetch error:", err);
+      } finally {
+        if (requestId === uploadsFetchIdRef.current && !silent) {
+          setLoadingUploads(false);
+        }
+      }
+    },
+    [
+      activeBatchId,
+      batches,
+      dateFilteredBatches,
+      filterDate,
+      perPage,
+      selectedBatchId,
+      uploadProcessStatus,
+    ]
+  );
 
-  const paginatedUploads = useMemo(() => {
-    const start = (page - 1) * perPage;
-    const end = start + perPage;
+  useEffect(() => {
+    fetchRecentUploadsRef.current = fetchRecentUploads;
+  }, [fetchRecentUploads]);
 
-    return filteredUploads.slice(start, end);
-  }, [filteredUploads, page, perPage]);
+  const goToNextPage = useCallback(() => {
+    if (!nextCursor) return;
+
+    setCursorStack((prev) => [...prev, nextCursor]);
+    fetchRecentUploads({ cursor: nextCursor });
+  }, [fetchRecentUploads, nextCursor]);
+
+  const goToPrevPage = useCallback(() => {
+    setCursorStack((prev) => {
+      if (prev.length <= 1) return prev;
+
+      const newStack = prev.slice(0, -1);
+      const prevCursor = newStack[newStack.length - 1] ?? null;
+      fetchRecentUploads({ cursor: prevCursor });
+      return newStack;
+    });
+  }, [fetchRecentUploads]);
 
   const clearTimers = useCallback(() => {
     if (clearMessageTimerRef.current) {
@@ -296,18 +371,24 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const dismissUploadStatus = useCallback(() => {
+    clearTimers();
+    setUploadProcessStatus(null);
+    setActiveBatchId(null);
+    setActiveUploadCount(0);
+    setCompletionSummary(null);
+    redirectedRef.current = false;
+  }, [clearTimers]);
+
   const clearUploadMessageAfterDelay = useCallback(() => {
     if (clearMessageTimerRef.current) {
       clearTimeout(clearMessageTimerRef.current);
     }
 
     clearMessageTimerRef.current = setTimeout(() => {
-      setUploadProcessStatus(null);
-      setActiveBatchId(null);
-      setCompletionSummary(null);
-      redirectedRef.current = false;
+      dismissUploadStatus();
     }, 30000);
-  }, []);
+  }, [dismissUploadStatus]);
 
   const redirectToResumeViewerAfterDelay = useCallback(
     (batchId: string) => {
@@ -334,38 +415,6 @@ export default function DashboardPage() {
       setBatches(data || []);
     } catch (err) {
       console.error("Batch fetch error:", err);
-    } finally {
-      setLoadingBatches(false);
-    }
-  }, []);
-
-  const fetchRecentUploads = useCallback(async (opts?: { silent?: boolean }) => {
-    const requestId = ++uploadsFetchIdRef.current;
-    const silent = opts?.silent ?? false;
-
-    if (!silent) {
-      setLoadingUploads(true);
-    }
-
-    try {
-      const res = await fetch(`${API}/upload/recent?page=1&per_page=100`, {
-        headers,
-      });
-
-      const result = await res.json();
-
-      // Ignore outdated responses so an older "Processing" fetch
-      // cannot overwrite a newer Shortlisted/Rejected result.
-      if (requestId !== uploadsFetchIdRef.current) return;
-
-      setUploads(result.data || []);
-    } catch (err) {
-      if (requestId !== uploadsFetchIdRef.current) return;
-      console.error("Recent uploads fetch error:", err);
-    } finally {
-      if (requestId === uploadsFetchIdRef.current && !silent) {
-        setLoadingUploads(false);
-      }
     }
   }, []);
 
@@ -443,7 +492,6 @@ export default function DashboardPage() {
         if (excelWaitCountRef.current >= 10) {
           setUploadProcessStatus("completed");
           clearUploadMessageAfterDelay();
-          redirectToResumeViewerAfterDelay(batchId);
           excelWaitCountRef.current = 0;
           return true;
         }
@@ -459,13 +507,9 @@ export default function DashboardPage() {
         return true;
       }
 
-      // Rejected-only (or mixed rejected) batches: show counts and still
-      // redirect to Resume Viewer so the flow always finishes.
-      setUploadProcessStatus(
-        summary.rejected > 0 ? "completed" : "no_results"
-      );
+      // No shortlisted CVs — no Excel file; stay on dashboard.
+      setUploadProcessStatus("no_results");
       clearUploadMessageAfterDelay();
-      redirectToResumeViewerAfterDelay(batchId);
       return true;
     },
     [
@@ -479,9 +523,10 @@ export default function DashboardPage() {
     if (!activeBatchId || uploadProcessStatus !== "processing") return;
 
     try {
-      const res = await fetch(`${API}/upload/recent?page=1&per_page=100`, {
-        headers,
-      });
+      const res = await fetch(
+        `${API}/upload/recent?batch_id=${activeBatchId}&per_page=100`,
+        { headers }
+      );
 
       const result = await res.json();
       const allFiles: UploadItem[] = result.data || [];
@@ -521,16 +566,19 @@ export default function DashboardPage() {
   ]);
 
   useEffect(() => {
-    fetchRecentUploads();
+    prefetchMasters();
     refreshDashboard();
     fetchBatches();
-  }, [fetchRecentUploads, refreshDashboard, fetchBatches]);
+  }, [refreshDashboard, fetchBatches]);
 
   useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
+    setCursorStack([null]);
+    fetchRecentUploadsRef.current({
+      cursor: null,
+      silent: initialUploadsLoadedRef.current,
+    });
+    initialUploadsLoadedRef.current = true;
+  }, [filterDate, selectedBatchId]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -576,7 +624,11 @@ export default function DashboardPage() {
             failed: data.failed ?? prev.failed,
           }));
 
-          fetchRecentUploads({ silent: true });
+          fetchRecentUploads({
+            silent: true,
+            cursor:
+              cursorStackRef.current[cursorStackRef.current.length - 1] ?? null,
+          });
           fetchBatches();
 
           // Drive the same completion flow for 1 or N CVs via polling logic.
@@ -601,18 +653,15 @@ export default function DashboardPage() {
             rejected: data.rejected || 0,
             failed: data.failed || 0,
           });
-          setUploadProcessStatus(
-            (data.rejected || 0) > 0 ? "completed" : "no_results"
-          );
-          fetchRecentUploads({ silent: true });
+          setUploadProcessStatus("no_results");
+          fetchRecentUploads({
+            silent: true,
+            cursor:
+              cursorStackRef.current[cursorStackRef.current.length - 1] ?? null,
+          });
           fetchBatches();
           refreshDashboard();
           clearUploadMessageAfterDelay();
-
-          const batchId = data.batch_id || currentBatchId;
-          if (batchId) {
-            redirectToResumeViewerAfterDelay(batchId);
-          }
           return;
         }
 
@@ -633,11 +682,19 @@ export default function DashboardPage() {
             }
 
             setUploadProcessStatus("completed");
-            fetchRecentUploads({ silent: true });
+            fetchRecentUploads({
+              silent: true,
+              cursor:
+                cursorStackRef.current[cursorStackRef.current.length - 1] ??
+                null,
+            });
             fetchBatches();
             refreshDashboard();
             clearUploadMessageAfterDelay();
-            redirectToResumeViewerAfterDelay(batchId);
+
+            if (data.file) {
+              redirectToResumeViewerAfterDelay(batchId);
+            }
           }
 
           return;
@@ -650,7 +707,11 @@ export default function DashboardPage() {
             rejected: data.rejected || 0,
             failed: data.failed || 0,
           });
-          fetchRecentUploads({ silent: true });
+          fetchRecentUploads({
+            silent: true,
+            cursor:
+              cursorStackRef.current[cursorStackRef.current.length - 1] ?? null,
+          });
           fetchBatches();
           refreshDashboard();
           checkBatchCompletion();
@@ -744,19 +805,53 @@ export default function DashboardPage() {
       <UploadSection
         status={uploadProcessStatus}
         summary={completionSummary}
-        onUploadStarted={(batchId) => {
+        batchId={activeBatchId}
+        uploadedCount={activeUploadCount}
+        onDismiss={dismissUploadStatus}
+        onUploadPending={(fileCount) => {
+          clearTimers();
+          redirectedRef.current = false;
+          excelWaitCountRef.current = 0;
+          setCompletionSummary(null);
+          setActiveUploadCount(fileCount);
+          setUploadProcessStatus("processing");
+        }}
+        onUploadFailed={() => {
+          setUploadProcessStatus(null);
+          setActiveUploadCount(0);
+        }}
+        onUploadStarted={(batchId, uploadedFiles) => {
           clearTimers();
           redirectedRef.current = false;
           excelWaitCountRef.current = 0;
           setCompletionSummary(null);
           setActiveBatchId(batchId);
+          setActiveUploadCount(uploadedFiles.length);
           setSelectedBatchId("latest");
           setDraftBatchId("latest");
           setFilterDate("");
           setDraftFilterDate("");
-          setPage(1);
+          setCursorStack([null]);
           setUploadProcessStatus("processing");
-          fetchRecentUploads({ silent: true });
+
+          if (uploadedFiles.length > 0) {
+            const optimisticUploads: UploadItem[] = uploadedFiles.map(
+              (filename, index) => ({
+                id: -(index + 1),
+                batch_id: batchId,
+                filename,
+                file_url: "",
+                stored_file: "",
+                status: "Uploaded",
+                created_at: new Date().toISOString(),
+              })
+            );
+            setUploads(optimisticUploads);
+            setNextCursor(null);
+            setHasMore(false);
+          }
+
+          fetchRecentUploadsRef.current({ silent: true, cursor: null });
           fetchBatches();
           refreshDashboard();
         }}
@@ -915,15 +1010,15 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {loadingUploads || loadingBatches ? (
+        {loadingUploads && uploads.length === 0 ? (
           <UploadListSkeleton />
-        ) : filteredUploads.length === 0 ? (
+        ) : uploads.length === 0 ? (
           <div className="text-center py-10 text-slate-500">
             No uploads found.
           </div>
         ) : (
           <div className="space-y-4">
-            {paginatedUploads.map((file) => (
+            {uploads.map((file) => (
               <div
                 key={file.id}
                 className="flex items-center justify-between border rounded-2xl px-5 py-4"
@@ -955,33 +1050,21 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 mt-6">
+        {(cursorStack.length > 1 || hasMore) && (
+          <div className="flex items-center justify-center gap-3 mt-6">
             <button
-              disabled={page === 1}
-              onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
+              disabled={cursorStack.length <= 1}
+              onClick={goToPrevPage}
               className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
             >
               Prev
             </button>
 
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPage(p)}
-                className={`px-3 py-2 rounded ${
-                  p === page ? "bg-cyan-600 text-white" : "bg-slate-100"
-                }`}
-              >
-                {p}
-              </button>
-            ))}
+            <span className="text-sm text-slate-500">Page {cursorStack.length}</span>
 
             <button
-              disabled={page === totalPages}
-              onClick={() =>
-                setPage((prev) => Math.min(prev + 1, totalPages))
-              }
+              disabled={!hasMore}
+              onClick={goToNextPage}
               className="px-3 py-2 bg-slate-100 rounded disabled:opacity-40"
             >
               Next

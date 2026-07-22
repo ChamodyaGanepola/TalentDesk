@@ -15,6 +15,7 @@ import {
 import { ArrowLeft, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useToast } from "@/app/components/ui/Toast";
 
 type UploadStatus =
   | "Uploaded"
@@ -108,6 +109,7 @@ function getUploadUrl(storedFile: string) {
 function BatchDetailsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { showToast } = useToast();
 
   const batchId = searchParams.get("batch");
 
@@ -398,7 +400,10 @@ function BatchDetailsContent() {
 
                   <button
                     type="button"
-                    onClick={() => setStatusFilter(draftStatusFilter)}
+                    onClick={() => {
+                      setStatusFilter(draftStatusFilter);
+                      showToast("Status filter applied.", "success");
+                    }}
                     className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl text-sm"
                   >
                     <Filter size={16} />
@@ -411,6 +416,7 @@ function BatchDetailsContent() {
                       onClick={() => {
                         setDraftStatusFilter("All");
                         setStatusFilter("All");
+                        showToast("Status filter cleared.", "info");
                       }}
                       className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900"
                     >

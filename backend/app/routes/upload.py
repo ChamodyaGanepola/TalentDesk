@@ -3,6 +3,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db_mysql import get_db
 from app.ws.broadcaster import broadcast_stats
+from app.core.pagination import (
+    clamp_page_size,
+    decode_cursor,
+    encode_cursor,
+    parse_cursor_datetime,
+    split_keyset_page,
+    ensure_pagination_indexes,
+)
 
 import os
 import uuid
@@ -11,6 +19,16 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 router = APIRouter()
+
+_indexes_ready = False
+
+
+def _ensure_indexes(db: Session):
+    global _indexes_ready
+    if _indexes_ready:
+        return
+    ensure_pagination_indexes(db)
+    _indexes_ready = True
 
 # =========================
 # CONFIG
@@ -410,28 +428,67 @@ async def upload_cvs(
 # =========================
 @router.get("/upload/recent")
 def recent_uploads(
-    page: int = 1,
+    cursor: str | None = Query(None),
     per_page: int = 10,
-    db: Session = Depends(get_db)
+    batch_id: str | None = Query(None),
+    date: str | None = Query(None),
+    db: Session = Depends(get_db),
 ):
-    page = max(page, 1)
-    per_page = min(max(per_page, 1), 100)
+    """
+    Keyset-paginated recent uploads (default 10/page).
+    Cursor is opaque; ordered by created_at DESC, id DESC.
+    """
+    _ensure_indexes(db)
 
-    offset = (page - 1) * per_page
+    page_size = clamp_page_size(per_page)
+    fetch_limit = page_size + 1
 
-    rows = db.execute(text("""
+    where_parts = ["1=1"]
+    params: dict = {"fetch_limit": fetch_limit}
+
+    if batch_id:
+        where_parts.append("batch_id = :batch_id")
+        params["batch_id"] = batch_id
+
+    if date:
+        where_parts.append(
+            "DATE(DATE_ADD(created_at, INTERVAL 330 MINUTE)) = :date"
+        )
+        params["date"] = date
+
+    cursor_data = decode_cursor(cursor)
+    if cursor_data:
+        cursor_created = parse_cursor_datetime(cursor_data.get("created_at"))
+        cursor_id = cursor_data.get("id")
+        if cursor_created is not None and cursor_id is not None:
+            where_parts.append("""
+                (
+                    created_at < :cursor_created
+                    OR (created_at = :cursor_created AND id < :cursor_id)
+                )
+            """)
+            params["cursor_created"] = cursor_created
+            params["cursor_id"] = int(cursor_id)
+
+    where_sql = " AND ".join(where_parts)
+
+    rows = db.execute(text(f"""
         SELECT id, batch_id, file_name, file_url, status, created_at
         FROM uploads
-        ORDER BY created_at DESC
-        LIMIT :per_page OFFSET :offset
-    """), {
-        "per_page": per_page,
-        "offset": offset
-    }).mappings().all()
+        WHERE {where_sql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT :fetch_limit
+    """), params).mappings().all()
 
-    total = db.execute(text("""
-        SELECT COUNT(*) as count FROM uploads
-    """)).mappings().first()["count"]
+    items, has_more = split_keyset_page(list(rows), page_size)
+
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_cursor({
+            "id": last["id"],
+            "created_at": last["created_at"].isoformat() if last["created_at"] else None,
+        })
 
     return {
         "data": [
@@ -442,13 +499,13 @@ def recent_uploads(
                 "file_url": r["file_url"],
                 "stored_file": os.path.basename(r["file_url"]),
                 "status": r["status"],
-                "created_at": r["created_at"].isoformat() if r["created_at"] else None
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             }
-            for r in rows
+            for r in items
         ],
-        "total": total,
-        "page": page,
-        "per_page": per_page
+        "per_page": page_size,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
     }
 
 
@@ -590,25 +647,22 @@ def regenerate_export(batch_id: str, db: Session = Depends(get_db)):
 # =========================
 @router.get("/batch/excels")
 def get_excels(
-    page: int = 1,
+    cursor: str | None = Query(None),
     per_page: int = 10,
     date: str = Query(None),
     batch_id: str = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    page = max(page, 1)
-    per_page = min(max(per_page, 1), 100)
+    """Keyset-paginated Excel exports (default 10/page), ordered by id DESC."""
+    _ensure_indexes(db)
 
-    offset = (page - 1) * per_page
-    params = {
-        "per_page": per_page,
-        "offset": offset
-    }
+    page_size = clamp_page_size(per_page)
+    fetch_limit = page_size + 1
 
     where_parts = []
+    params: dict = {"fetch_limit": fetch_limit}
 
     if date:
-        # Treat stored timestamps as UTC and filter by Sri Lanka calendar day.
         where_parts.append(
             "DATE(DATE_ADD(created_at, INTERVAL 330 MINUTE)) = :date"
         )
@@ -618,6 +672,11 @@ def get_excels(
         where_parts.append("batch_id = :batch_id")
         params["batch_id"] = batch_id
 
+    cursor_data = decode_cursor(cursor)
+    if cursor_data and cursor_data.get("id") is not None:
+        where_parts.append("id < :cursor_id")
+        params["cursor_id"] = int(cursor_data["id"])
+
     where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
     sql = f"""
@@ -625,24 +684,16 @@ def get_excels(
         FROM batch_exports
         {where_sql}
         ORDER BY id DESC
-        LIMIT :per_page OFFSET :offset
+        LIMIT :fetch_limit
     """
 
     rows = db.execute(text(sql), params).mappings().all()
+    items, has_more = split_keyset_page(list(rows), page_size)
 
-    count_sql = f"""
-        SELECT COUNT(*) as count
-        FROM batch_exports
-        {where_sql}
-    """
-
-    count_params = {}
-    if date:
-        count_params["date"] = date
-    if batch_id:
-        count_params["batch_id"] = batch_id
-
-    total = db.execute(text(count_sql), count_params).mappings().first()["count"]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_cursor({"id": last["id"]})
 
     return {
         "data": [
@@ -650,13 +701,13 @@ def get_excels(
                 "id": r["id"],
                 "batch_id": r["batch_id"],
                 "file": r["excel_file"],
-                "created_at": r["created_at"].isoformat() if r["created_at"] else None
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             }
-            for r in rows
+            for r in items
         ],
-        "total": total,
-        "page": page,
-        "per_page": per_page
+        "per_page": page_size,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
     }
     
 @router.get("/upload/stats/all")

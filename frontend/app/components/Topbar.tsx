@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { LogOut } from "lucide-react";
+import ConfirmDialog from "@/app/components/ui/ConfirmDialog";
+import { useToast } from "@/app/components/ui/Toast";
 
 type User = {
   name?: string;
@@ -18,8 +20,10 @@ function getPageTitle(pathname: string) {
 
 export default function Topbar() {
   const pathname = usePathname();
+  const { showToast } = useToast();
   const [user, setUser] = useState<User | null>(null);
   const [open, setOpen] = useState(false);
+  const [logoutOpen, setLogoutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,6 +51,7 @@ export default function Topbar() {
 
   const handleLogout = () => {
     localStorage.removeItem("user");
+    showToast("You have been logged out.", "info");
     window.location.href = "/";
   };
 
@@ -89,7 +94,10 @@ export default function Topbar() {
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={handleLogout}
+                  onClick={() => {
+                    setOpen(false);
+                    setLogoutOpen(true);
+                  }}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-red-600 hover:bg-red-50 transition"
                 >
                   <LogOut size={18} />
@@ -100,6 +108,17 @@ export default function Topbar() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={logoutOpen}
+        title="Log out?"
+        message="You will need to sign in again to access TalentDesk."
+        confirmLabel="Log out"
+        cancelLabel="Stay signed in"
+        variant="danger"
+        onConfirm={handleLogout}
+        onCancel={() => setLogoutOpen(false)}
+      />
     </div>
   );
 }

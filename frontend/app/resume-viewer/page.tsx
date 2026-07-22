@@ -1,11 +1,12 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Sidebar from "@/app/components/Sidebar";
 import Topbar from "@/app/components/Topbar";
 import { ExcelListSkeleton } from "@/app/components/Skeletons";
 import { formatSLDateTime } from "@/app/lib/datetime";
-import { Download, Filter } from "lucide-react";
+import { useToast } from "@/app/components/ui/Toast";
+import { Download, Filter, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 type ExcelFile = {
@@ -16,6 +17,7 @@ type ExcelFile = {
 };
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+const PER_PAGE = 10;
 
 const headers = {
   "ngrok-skip-browser-warning": "true",
@@ -31,77 +33,108 @@ function getExcelUrl(filePath: string) {
 function ResumeViewerContent() {
   const searchParams = useSearchParams();
   const batchFromUrl = searchParams.get("batch");
+  const { showToast } = useToast();
 
   const [filterDate, setFilterDate] = useState("");
   const [files, setFiles] = useState<ExcelFile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
 
-  const [page, setPage] = useState(1);
-  const [perPage] = useState(5);
-  const [total, setTotal] = useState(0);
+  const fetchFiles = useCallback(
+    async (
+      cursor: string | null = null,
+      opts?: { date?: string }
+    ) => {
+      const activeDate = opts?.date !== undefined ? opts.date : filterDate;
+      setLoading(true);
 
-  const totalPages = Math.ceil(total / perPage) || 1;
+      try {
+        if (batchFromUrl) {
+          const exportRes = await fetch(
+            `${API}/resume/export/${batchFromUrl}`,
+            { headers }
+          );
+          const exportData = await exportRes.json();
 
-  const fetchFiles = async (pageNumber: number = 1) => {
-    setLoading(true);
-
-    try {
-      // When a batch is selected, fetch that export directly so it always shows
-      // (do not filter a paginated global list — newer UTC timestamps sorted after
-      // older local timestamps and the file looked "missing").
-      if (batchFromUrl) {
-        const exportRes = await fetch(
-          `${API}/resume/export/${batchFromUrl}`,
-          { headers }
-        );
-        const exportData = await exportRes.json();
-
-        if (exportData?.excel_file) {
-          setFiles([
-            {
-              id: 0,
-              batch_id: batchFromUrl,
-              file: String(exportData.excel_file).replace(/\\/g, "/"),
-              created_at: exportData.created_at || null,
-            },
-          ]);
-          setTotal(1);
-          setPage(1);
-        } else {
-          setFiles([]);
-          setTotal(0);
-          setPage(1);
+          if (exportData?.excel_file) {
+            setFiles([
+              {
+                id: 0,
+                batch_id: batchFromUrl,
+                file: String(exportData.excel_file).replace(/\\/g, "/"),
+                created_at: exportData.created_at || null,
+              },
+            ]);
+            setNextCursor(null);
+            setHasMore(false);
+            setCursorStack([null]);
+          } else {
+            setFiles([]);
+            setNextCursor(null);
+            setHasMore(false);
+            setCursorStack([null]);
+          }
+          return;
         }
-        return;
+
+        const params = new URLSearchParams();
+        params.set("per_page", String(PER_PAGE));
+        if (cursor) params.set("cursor", cursor);
+        if (activeDate) params.set("date", activeDate);
+
+        const res = await fetch(`${API}/batch/excels?${params.toString()}`, {
+          headers,
+        });
+        const data = await res.json();
+
+        setFiles(data.data || []);
+        setNextCursor(data.next_cursor || null);
+        setHasMore(Boolean(data.has_more));
+      } catch (err) {
+        console.error("Excel fetch failed:", err);
+        setFiles([]);
+        setNextCursor(null);
+        setHasMore(false);
+      } finally {
+        setLoading(false);
       }
-
-      let url = `${API}/batch/excels?page=${pageNumber}&per_page=${perPage}`;
-
-      if (filterDate) {
-        url += `&date=${filterDate}`;
-      }
-
-      const res = await fetch(url, { headers });
-      const data = await res.json();
-
-      setFiles(data.data || []);
-      setTotal(data.total || 0);
-      setPage(data.page || pageNumber);
-    } catch (err) {
-      console.error("Excel fetch failed:", err);
-      setFiles([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [batchFromUrl, filterDate]
+  );
 
   useEffect(() => {
-    fetchFiles(1);
+    setCursorStack([null]);
+    fetchFiles(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchFromUrl]);
 
+  const applyFilter = () => {
+    setCursorStack([null]);
+    fetchFiles(null);
+    showToast("Date filter applied.", "success");
+  };
+
+  const goToNextPage = () => {
+    if (!nextCursor) return;
+    setCursorStack((prev) => [...prev, nextCursor]);
+    fetchFiles(nextCursor);
+  };
+
+  const goToPrevPage = () => {
+    setCursorStack((prev) => {
+      if (prev.length <= 1) return prev;
+      const newStack = prev.slice(0, -1);
+      const prevCursor = newStack[newStack.length - 1] ?? null;
+      fetchFiles(prevCursor);
+      return newStack;
+    });
+  };
+
   const downloadExcel = async (file: ExcelFile) => {
+    setDownloadingId(file.id);
     try {
       const res = await fetch(getExcelUrl(file.file), { headers });
 
@@ -122,9 +155,12 @@ function ResumeViewerContent() {
       a.remove();
 
       window.URL.revokeObjectURL(url);
+      showToast("Excel downloaded successfully.", "success");
     } catch (err) {
       console.error("Download failed:", err);
-      alert("Download failed. Please try again.");
+      showToast("Download failed. Please try again.", "error");
+    } finally {
+      setDownloadingId(null);
     }
   };
 
@@ -148,23 +184,40 @@ function ResumeViewerContent() {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <input
-              type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
-              className="bg-white border border-slate-200 px-4 py-2 rounded-xl outline-none text-sm"
-            />
+          {!batchFromUrl && (
+            <div className="flex items-center gap-3">
+              <input
+                type="date"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+                className="bg-white border border-slate-200 px-4 py-2 rounded-xl outline-none text-sm"
+              />
 
-            <button
-              type="button"
-              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-5 py-2 rounded-xl"
-              onClick={() => fetchFiles(1)}
-            >
-              <Filter size={18} />
-              Filter
-            </button>
-          </div>
+              <button
+                type="button"
+                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-5 py-2 rounded-xl"
+                onClick={applyFilter}
+              >
+                <Filter size={18} />
+                Filter
+              </button>
+
+              {filterDate && (
+                <button
+                  type="button"
+                  className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900"
+                  onClick={() => {
+                    setFilterDate("");
+                    setCursorStack([null]);
+                    fetchFiles(null, { date: "" });
+                    showToast("Date filter cleared.", "info");
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="space-y-5 text-slate-900">
@@ -197,42 +250,37 @@ function ResumeViewerContent() {
 
                 <button
                   type="button"
-                  className="inline-flex items-center gap-2 text-cyan-600 font-medium hover:text-cyan-800"
+                  disabled={downloadingId === file.id}
+                  className="inline-flex items-center gap-2 text-cyan-600 font-medium hover:text-cyan-800 disabled:opacity-50"
                   onClick={() => downloadExcel(file)}
                 >
-                  <Download size={18} />
-                  Download Excel
+                  {downloadingId === file.id ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : (
+                    <Download size={18} />
+                  )}
+                  {downloadingId === file.id ? "Downloading..." : "Download Excel"}
                 </button>
               </div>
             ))
           )}
         </div>
 
-        {!batchFromUrl && totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 mt-6 text-slate-900">
+        {!batchFromUrl && (cursorStack.length > 1 || hasMore) && (
+          <div className="flex items-center justify-center gap-3 mt-6 text-slate-900">
             <button
-              disabled={page === 1 || loading}
-              onClick={() => fetchFiles(page - 1)}
+              disabled={cursorStack.length <= 1 || loading}
+              onClick={goToPrevPage}
               className="px-3 py-2 bg-white rounded disabled:opacity-40"
             >
               Prev
             </button>
 
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-              <button
-                key={p}
-                onClick={() => fetchFiles(p)}
-                className={`px-3 py-2 rounded ${
-                  p === page ? "bg-cyan-600 text-white" : "bg-white"
-                }`}
-              >
-                {p}
-              </button>
-            ))}
+            <span className="text-sm text-slate-500">Page {cursorStack.length}</span>
 
             <button
-              disabled={page === totalPages || loading}
-              onClick={() => fetchFiles(page + 1)}
+              disabled={!hasMore || loading}
+              onClick={goToNextPage}
               className="px-3 py-2 bg-white rounded disabled:opacity-40"
             >
               Next

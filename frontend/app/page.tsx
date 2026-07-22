@@ -2,13 +2,18 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useToast } from "@/app/components/ui/Toast";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { showToast } = useToast();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   
   useEffect(() => {
     const savedEmail = localStorage.getItem("remember_email");
@@ -23,6 +28,8 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError("");
+    setLoading(true);
 
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/login`, {
@@ -37,7 +44,7 @@ export default function LoginPage() {
 
       //  backend failed login
       if (!res.ok || !data.success) {
-        alert(data.message || "Login failed");
+        setError(data.message || "Login failed. Please check your credentials.");
         return;
       }
 
@@ -52,10 +59,12 @@ export default function LoginPage() {
 
       localStorage.setItem("user", JSON.stringify(data.user));
 
+      showToast("Welcome back!", "success");
       router.push("/dashboard");
-
     } catch (err) {
-      alert("Server error. Please try again.");
+      setError("Server error. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -80,6 +89,12 @@ export default function LoginPage() {
         </p>
 
         <form onSubmit={handleLogin} className="space-y-5">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
+              {error}
+            </div>
+          )}
+
           <div>
             <label className="block text-sm mb-2 text-slate-600">
               Email Address
@@ -120,9 +135,11 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="w-full bg-cyan-600 hover:bg-cyan-700 text-white py-3 rounded-xl font-semibold transition"
+            disabled={loading}
+            className="w-full bg-cyan-600 hover:bg-cyan-700 text-white py-3 rounded-xl font-semibold transition disabled:opacity-60 inline-flex items-center justify-center gap-2"
           >
-            Sign In
+            {loading && <Loader2 size={18} className="animate-spin" />}
+            {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
       </div>
