@@ -792,25 +792,6 @@ export default function DashboardPage() {
               title="Filter by date"
             />
 
-            <button
-              type="button"
-              onClick={applyFilters}
-              className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl text-sm"
-            >
-              <Filter size={16} />
-              Filter
-            </button>
-
-            {(filterDate || selectedBatchId !== "latest") && (
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900"
-              >
-                Clear
-              </button>
-            )}
-
             <div ref={dropdownRef} className="relative w-full sm:w-96">
               <button
                 type="button"
@@ -892,6 +873,25 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
+
+            <button
+              type="button"
+              onClick={applyFilters}
+              className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl text-sm whitespace-nowrap"
+            >
+              <Filter size={16} />
+              Filter
+            </button>
+
+            {(filterDate || selectedBatchId !== "latest") && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900 whitespace-nowrap"
+              >
+                Clear
+              </button>
+            )}
 
             {selectedBatchId !== "all" && dateFilteredBatches.length > 0 && (
               <button
