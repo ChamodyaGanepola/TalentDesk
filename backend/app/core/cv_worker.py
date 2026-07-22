@@ -326,6 +326,7 @@ async def cv_worker_loop():
                 UPDATE uploads
                 SET status=:status
                 WHERE id=:id
+                AND status='Processing'
             """), {
                 "status": status,
                 "id": job_id
@@ -342,10 +343,17 @@ async def cv_worker_loop():
             traceback.print_exc()
             db.rollback()
 
+            # Only fail jobs that are still mid-processing. Do not overwrite
+            # an already-committed Shortlisted/Rejected status.
             if job_id:
                 try:
-                    mark_failed(db, job_id, str(e))
-                    await broadcast_stats()
+                    still_open = db.execute(text("""
+                        SELECT status FROM uploads WHERE id=:id
+                    """), {"id": job_id}).scalar()
+
+                    if still_open in ("Uploaded", "Processing"):
+                        mark_failed(db, job_id, str(e))
+                        await broadcast_stats()
                 except Exception as failed_error:
                     print("Could not mark job as failed:", failed_error)
 

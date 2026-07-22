@@ -131,6 +131,12 @@ export default function DashboardPage() {
   );
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const redirectedRef = useRef(false);
+  const uploadsFetchIdRef = useRef(0);
+  const activeBatchIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeBatchIdRef.current = activeBatchId;
+  }, [activeBatchId]);
 
   const selectedBatch = useMemo(() => {
     if (selectedBatchId === "latest") return batches[0] || null;
@@ -218,8 +224,13 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const fetchRecentUploads = useCallback(async () => {
-    setLoadingUploads(true);
+  const fetchRecentUploads = useCallback(async (opts?: { silent?: boolean }) => {
+    const requestId = ++uploadsFetchIdRef.current;
+    const silent = opts?.silent ?? false;
+
+    if (!silent) {
+      setLoadingUploads(true);
+    }
 
     try {
       const res = await fetch(`${API}/upload/recent?page=1&per_page=100`, {
@@ -228,11 +239,18 @@ export default function DashboardPage() {
 
       const result = await res.json();
 
+      // Ignore outdated responses so an older "Processing" fetch
+      // cannot overwrite a newer Shortlisted/Rejected result.
+      if (requestId !== uploadsFetchIdRef.current) return;
+
       setUploads(result.data || []);
     } catch (err) {
+      if (requestId !== uploadsFetchIdRef.current) return;
       console.error("Recent uploads fetch error:", err);
     } finally {
-      setLoadingUploads(false);
+      if (requestId === uploadsFetchIdRef.current && !silent) {
+        setLoadingUploads(false);
+      }
     }
   }, []);
 
@@ -288,9 +306,15 @@ export default function DashboardPage() {
       });
 
       const result = await res.json();
+      const allFiles: UploadItem[] = result.data || [];
 
-      const batchFiles: UploadItem[] = (result.data || []).filter(
-        (file: UploadItem) => file.batch_id === activeBatchId
+      // Keep list in sync while CVs move Uploaded → Processing → final.
+      // Invalidate in-flight fetchRecentUploads so they can't overwrite this.
+      uploadsFetchIdRef.current += 1;
+      setUploads(allFiles);
+
+      const batchFiles = allFiles.filter(
+        (file) => file.batch_id === activeBatchId
       );
 
       if (batchFiles.length === 0) return;
@@ -317,7 +341,6 @@ export default function DashboardPage() {
         clearUploadMessageAfterDelay();
       }
 
-      fetchRecentUploads();
       fetchBatches();
       refreshDashboard();
     } catch (error) {
@@ -328,7 +351,6 @@ export default function DashboardPage() {
     uploadProcessStatus,
     checkExcelAndRedirect,
     clearUploadMessageAfterDelay,
-    fetchRecentUploads,
     fetchBatches,
     refreshDashboard,
   ]);
@@ -377,6 +399,7 @@ export default function DashboardPage() {
     ws.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
+        const currentBatchId = activeBatchIdRef.current;
 
         if (data.event === "stats_update") {
           setStats((prev) => ({
@@ -388,14 +411,14 @@ export default function DashboardPage() {
             failed: data.failed ?? prev.failed,
           }));
 
-          fetchRecentUploads();
+          fetchRecentUploads({ silent: true });
           fetchBatches();
           return;
         }
 
         if (data.event === "batch_completed_no_results") {
           setUploadProcessStatus("no_results");
-          fetchRecentUploads();
+          fetchRecentUploads({ silent: true });
           fetchBatches();
           refreshDashboard();
           clearUploadMessageAfterDelay();
@@ -403,11 +426,11 @@ export default function DashboardPage() {
         }
 
         if (data.event === "excel_exported") {
-          const batchId = data.batch_id || activeBatchId;
+          const batchId = data.batch_id || currentBatchId;
 
           if (batchId) {
             setUploadProcessStatus("completed");
-            fetchRecentUploads();
+            fetchRecentUploads({ silent: true });
             fetchBatches();
             refreshDashboard();
             clearUploadMessageAfterDelay();
@@ -418,12 +441,12 @@ export default function DashboardPage() {
         }
 
         if (data.event === "batch_completed") {
-          fetchRecentUploads();
+          fetchRecentUploads({ silent: true });
           fetchBatches();
           refreshDashboard();
 
           if (data.shortlisted > 0) {
-            const batchId = data.batch_id || activeBatchId;
+            const batchId = data.batch_id || currentBatchId;
 
             if (batchId) {
               await checkExcelAndRedirect(batchId);
@@ -450,7 +473,6 @@ export default function DashboardPage() {
       wsRef.current = null;
     };
   }, [
-    activeBatchId,
     fetchRecentUploads,
     fetchBatches,
     refreshDashboard,
