@@ -15,6 +15,8 @@ import {
 import { ArrowLeft, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import AuthGuard from "@/app/components/AuthGuard";
+import { getAuthHeaders } from "@/app/lib/auth";
 import { useToast } from "@/app/components/ui/Toast";
 
 type UploadStatus =
@@ -58,10 +60,6 @@ const API = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace
   /\/$/,
   ""
 );
-
-const headers = {
-  "ngrok-skip-browser-warning": "true",
-};
 
 function getStatusClass(status: UploadStatus) {
   if (status === "Shortlisted") return "bg-green-100 text-green-700";
@@ -129,7 +127,7 @@ function BatchDetailsContent() {
 
     try {
       const res = await fetch(`${API}/upload/batch/${batchId}`, {
-        headers,
+        headers: getAuthHeaders(),
       });
 
       const data = await res.json();
@@ -146,7 +144,7 @@ function BatchDetailsContent() {
       if (!nextBatch.excel_file && (nextBatch.shortlisted || 0) > 0) {
         try {
           const exportRes = await fetch(`${API}/resume/export/${batchId}`, {
-            headers,
+            headers: getAuthHeaders(),
           });
           const exportData = await exportRes.json();
           if (exportData?.excel_file) {
@@ -473,14 +471,16 @@ function BatchDetailsContent() {
 
 export default function BatchDetailsPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-slate-100 p-8 text-slate-500">
-          Loading batch details...
-        </div>
-      }
-    >
-      <BatchDetailsContent />
-    </Suspense>
+    <AuthGuard>
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-slate-100 p-8 text-slate-500">
+            Loading batch details...
+          </div>
+        }
+      >
+        <BatchDetailsContent />
+      </Suspense>
+    </AuthGuard>
   );
 }

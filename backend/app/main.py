@@ -9,6 +9,8 @@ from app.routes.auth import router as auth_router
 from app.routes.upload import router as upload_router
 from app.ws.manager import manager
 from app.core.cv_worker import cv_worker_loop
+from app.core.auth_schema import init_auth_db
+from app.db_mysql import SessionLocal
 
 app = FastAPI(title="Talent Desk API")
 
@@ -48,6 +50,13 @@ app.include_router(upload_router)
 # =========================
 @app.on_event("startup")
 async def startup():
+    db = SessionLocal()
+    try:
+        init_auth_db(db)
+        print("Auth tables ready")
+    finally:
+        db.close()
+
     if os.getenv("ENABLE_CV_WORKER", "true").lower() == "true":
         asyncio.create_task(cv_worker_loop())
         print("CV worker started")

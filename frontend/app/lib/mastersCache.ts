@@ -1,8 +1,6 @@
-const API = process.env.NEXT_PUBLIC_API_URL;
+import { getAuthHeaders } from "@/app/lib/auth";
 
-const headers = {
-  "ngrok-skip-browser-warning": "true",
-};
+const API = process.env.NEXT_PUBLIC_API_URL;
 
 type MastersData = {
   skills: string[];
@@ -30,8 +28,8 @@ export async function fetchMasters(force = false): Promise<MastersData> {
 
   inflight = (async () => {
     const [skillsRes, qualificationsRes] = await Promise.all([
-      fetch(`${API}/skills`, { headers }),
-      fetch(`${API}/qualifications`, { headers }),
+      fetch(`${API}/skills`, { headers: getAuthHeaders() }),
+      fetch(`${API}/qualifications`, { headers: getAuthHeaders() }),
     ]);
 
     const [skills, qualifications] = await Promise.all([

@@ -2,6 +2,7 @@
 
 import Sidebar from "@/app/components/Sidebar";
 import Topbar from "@/app/components/Topbar";
+import AuthGuard from "@/app/components/AuthGuard";
 import { prefetchMasters } from "@/app/lib/mastersCache";
 import { useEffect } from "react";
 
@@ -15,13 +16,15 @@ export default function DashboardLayout({
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-100 flex">
-      <Sidebar />
+    <AuthGuard>
+      <div className="min-h-screen bg-slate-100 flex">
+        <Sidebar />
 
-      <main className="flex-1 p-8">
-        <Topbar />
-        {children}
-      </main>
-    </div>
+        <main className="flex-1 p-8">
+          <Topbar />
+          {children}
+        </main>
+      </div>
+    </AuthGuard>
   );
 }

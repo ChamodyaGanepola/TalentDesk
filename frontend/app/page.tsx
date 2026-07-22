@@ -4,27 +4,42 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/app/components/ui/Toast";
+import {
+  clearRememberedEmail,
+  getRememberedEmail,
+  setRememberedEmail,
+} from "@/app/lib/auth";
+import { useAuth } from "@/app/providers/AuthProvider";
+
+const API = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(
+  /\/$/,
+  ""
+);
 
 export default function LoginPage() {
   const router = useRouter();
   const { showToast } = useToast();
+  const { login, isAuthenticated, loading: authLoading } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  
-  useEffect(() => {
-    const savedEmail = localStorage.getItem("remember_email");
-    const savedPassword = localStorage.getItem("remember_password");
 
-    if (savedEmail && savedPassword) {
+  useEffect(() => {
+    const savedEmail = getRememberedEmail();
+    if (savedEmail) {
       setEmail(savedEmail);
-      setPassword(savedPassword);
       setRememberMe(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (!authLoading && isAuthenticated) {
+      router.replace("/dashboard");
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,46 +47,54 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/login`, {
+      const res = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json", "ngrok-skip-browser-warning": "true",
+          "Content-Type": "application/json",
+          "ngrok-skip-browser-warning": "true",
         },
         body: JSON.stringify({ email, password }),
       });
 
       const data = await res.json();
 
-      //  backend failed login
       if (!res.ok || !data.success) {
-        setError(data.message || "Login failed. Please check your credentials.");
+        setError(data.message || "Invalid credentials.");
         return;
       }
 
-      // ✅ remember me
-      if (rememberMe) {
-        localStorage.setItem("remember_email", email);
-        localStorage.setItem("remember_password", password);
-      } else {
-        localStorage.removeItem("remember_email");
-        localStorage.removeItem("remember_password");
+      if (!data.access_token || !data.refresh_token) {
+        setError("Login succeeded but session tokens were not returned.");
+        return;
       }
 
-      localStorage.setItem("user", JSON.stringify(data.user));
+      if (rememberMe) {
+        setRememberedEmail(email);
+      } else {
+        clearRememberedEmail();
+      }
 
+      login(data.access_token, data.refresh_token, data.user);
       showToast("Welcome back!", "success");
       router.push("/dashboard");
-    } catch (err) {
+    } catch {
       setError("Server error. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+        <Loader2 className="h-8 w-8 animate-spin text-cyan-600" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-100 px-4">
       <div className="w-full max-w-md bg-white p-8 rounded-3xl shadow-xl">
-        {/* Logo */}
         <div className="flex justify-center mb-6">
           <img
             src="/MedcubeUSA.png"
@@ -99,13 +122,13 @@ export default function LoginPage() {
             <label className="block text-sm mb-2 text-slate-600">
               Email Address
             </label>
-
             <input
               type="email"
               placeholder="enter your email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-slate-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-50 text-black"
+              required
             />
           </div>
 
@@ -113,7 +136,6 @@ export default function LoginPage() {
             <label className="block text-sm mb-2 text-slate-600">
               Password
             </label>
-
             <input
               type="password"
               placeholder="enter your password"

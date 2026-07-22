@@ -21,6 +21,9 @@ import {
   fetchMasters,
   getCachedMasters,
 } from "@/app/lib/mastersCache";
+import { getAuthHeaders } from "@/app/lib/auth";
+
+const API = process.env.NEXT_PUBLIC_API_URL;
 
 type Props = {
   files: FileList | null;
@@ -33,12 +36,6 @@ type Props = {
 type FailedFile = {
   file: string;
   error: string;
-};
-
-const API = process.env.NEXT_PUBLIC_API_URL;
-
-const headers = {
-  "ngrok-skip-browser-warning": "true",
 };
 
 function ChipToggle({
@@ -216,7 +213,7 @@ export default function UploadFilterModal({
     try {
       await fetch(`${API}/skills/add`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...headers },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name }),
       });
 
@@ -240,7 +237,7 @@ export default function UploadFilterModal({
     try {
       await fetch(`${API}/qualifications/add`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...headers },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name }),
       });
 
@@ -286,7 +283,7 @@ export default function UploadFilterModal({
 
       const res = await fetch(`${API}/upload/cvs`, {
         method: "POST",
-        headers,
+        headers: getAuthHeaders(),
         body: formData,
       });
 

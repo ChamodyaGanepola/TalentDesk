@@ -5,11 +5,7 @@ import { usePathname } from "next/navigation";
 import { LogOut } from "lucide-react";
 import ConfirmDialog from "@/app/components/ui/ConfirmDialog";
 import { useToast } from "@/app/components/ui/Toast";
-
-type User = {
-  name?: string;
-  email?: string;
-};
+import { useAuth } from "@/app/providers/AuthProvider";
 
 function getPageTitle(pathname: string) {
   if (pathname === "/dashboard") return "CV Screening Dashboard";
@@ -21,22 +17,10 @@ function getPageTitle(pathname: string) {
 export default function Topbar() {
   const pathname = usePathname();
   const { showToast } = useToast();
-  const [user, setUser] = useState<User | null>(null);
+  const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem("user");
-
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
-      }
-    } catch (error) {
-      console.error("Failed to read user:", error);
-    }
-  }, []);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -49,8 +33,8 @@ export default function Topbar() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem("user");
+  const handleLogout = async () => {
+    await logout();
     showToast("You have been logged out.", "info");
     window.location.href = "/";
   };

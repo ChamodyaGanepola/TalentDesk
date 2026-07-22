@@ -5,7 +5,9 @@ import Sidebar from "@/app/components/Sidebar";
 import Topbar from "@/app/components/Topbar";
 import { ExcelListSkeleton } from "@/app/components/Skeletons";
 import { formatSLDateTime } from "@/app/lib/datetime";
+import AuthGuard from "@/app/components/AuthGuard";
 import { useToast } from "@/app/components/ui/Toast";
+import { getAuthHeaders } from "@/app/lib/auth";
 import { Download, Filter, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
@@ -18,10 +20,6 @@ type ExcelFile = {
 
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const PER_PAGE = 10;
-
-const headers = {
-  "ngrok-skip-browser-warning": "true",
-};
 
 function getExcelUrl(filePath: string) {
   const clean = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -55,7 +53,7 @@ function ResumeViewerContent() {
         if (batchFromUrl) {
           const exportRes = await fetch(
             `${API}/resume/export/${batchFromUrl}`,
-            { headers }
+            { headers: getAuthHeaders() }
           );
           const exportData = await exportRes.json();
 
@@ -86,7 +84,7 @@ function ResumeViewerContent() {
         if (activeDate) params.set("date", activeDate);
 
         const res = await fetch(`${API}/batch/excels?${params.toString()}`, {
-          headers,
+          headers: getAuthHeaders(),
         });
         const data = await res.json();
 
@@ -136,7 +134,7 @@ function ResumeViewerContent() {
   const downloadExcel = async (file: ExcelFile) => {
     setDownloadingId(file.id);
     try {
-      const res = await fetch(getExcelUrl(file.file), { headers });
+      const res = await fetch(getExcelUrl(file.file), { headers: getAuthHeaders() });
 
       if (!res.ok) {
         throw new Error("Download failed");
@@ -294,14 +292,16 @@ function ResumeViewerContent() {
 
 export default function ResumeViewerPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-slate-100 p-8">
-          <ExcelListSkeleton />
-        </div>
-      }
-    >
-      <ResumeViewerContent />
-    </Suspense>
+    <AuthGuard>
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-slate-100 p-8">
+            <ExcelListSkeleton />
+          </div>
+        }
+      >
+        <ResumeViewerContent />
+      </Suspense>
+    </AuthGuard>
   );
 }

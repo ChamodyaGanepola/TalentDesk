@@ -13,6 +13,7 @@ import {
   toSLDateKey,
 } from "@/app/lib/datetime";
 import { prefetchMasters } from "@/app/lib/mastersCache";
+import { getAuthHeaders } from "@/app/lib/auth";
 import { useToast } from "@/app/components/ui/Toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -67,10 +68,6 @@ type BatchItem = {
 
 const API = process.env.NEXT_PUBLIC_API_URL;
 const WS = process.env.NEXT_PUBLIC_WS_URL;
-
-const headers = {
-  "ngrok-skip-browser-warning": "true",
-};
 
 function getStatusClass(status: UploadStatus) {
   if (status === "Shortlisted") return "bg-green-100 text-green-700";
@@ -307,7 +304,7 @@ export default function DashboardPage() {
         if (filters.date) params.set("date", filters.date);
 
         const res = await fetch(`${API}/upload/recent?${params.toString()}`, {
-          headers,
+          headers: getAuthHeaders(),
         });
 
         const result = await res.json();
@@ -409,7 +406,7 @@ export default function DashboardPage() {
 
   const fetchBatches = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/upload/batches`, { headers });
+      const res = await fetch(`${API}/upload/batches`, { headers: getAuthHeaders() });
       const data = await res.json();
 
       setBatches(data || []);
@@ -420,7 +417,7 @@ export default function DashboardPage() {
 
   const refreshDashboard = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/upload/stats/all`, { headers });
+      const res = await fetch(`${API}/upload/stats/all`, { headers: getAuthHeaders() });
       const data = await res.json();
 
       setStats({
@@ -442,7 +439,7 @@ export default function DashboardPage() {
     async (batchId: string) => {
       try {
         const res = await fetch(`${API}/resume/export/${batchId}`, {
-          headers,
+          headers: getAuthHeaders(),
         });
 
         const data = await res.json();
@@ -525,7 +522,7 @@ export default function DashboardPage() {
     try {
       const res = await fetch(
         `${API}/upload/recent?batch_id=${activeBatchId}&per_page=100`,
-        { headers }
+        { headers: getAuthHeaders() }
       );
 
       const result = await res.json();

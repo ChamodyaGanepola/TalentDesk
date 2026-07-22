@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Body, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from app.core.auth import get_current_user
 from app.db_mysql import get_db
 from app.ws.broadcaster import broadcast_stats
 from app.core.pagination import (
@@ -18,7 +19,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 _indexes_ready = False
 
