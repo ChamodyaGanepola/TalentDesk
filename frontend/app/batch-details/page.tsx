@@ -12,7 +12,7 @@ import {
   formatExperienceFromMonths,
   formatSLDateTime,
 } from "@/app/lib/datetime";
-import { ArrowLeft, Download, FileSpreadsheet } from "lucide-react";
+import { ArrowLeft, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -115,6 +115,7 @@ function BatchDetailsContent() {
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<"All" | UploadStatus>("All");
+  const [draftStatusFilter, setDraftStatusFilter] = useState<"All" | UploadStatus>("All");
 
   const fetchBatchDetails = useCallback(async () => {
     if (!batchId) {
@@ -379,20 +380,44 @@ function BatchDetailsContent() {
                   </p>
                 </div>
 
-                <select
-                  value={statusFilter}
-                  onChange={(e) =>
-                    setStatusFilter(e.target.value as "All" | UploadStatus)
-                  }
-                  className="border border-slate-300 rounded-xl px-4 py-2 text-sm outline-none text-slate-700 bg-white"
-                >
-                  <option value="All">All Status</option>
-                  <option value="Uploaded">Uploaded</option>
-                  <option value="Processing">Processing</option>
-                  <option value="Shortlisted">Shortlisted</option>
-                  <option value="Rejected">Rejected</option>
-                  <option value="Failed">Failed</option>
-                </select>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <select
+                    value={draftStatusFilter}
+                    onChange={(e) =>
+                      setDraftStatusFilter(e.target.value as "All" | UploadStatus)
+                    }
+                    className="border border-slate-300 rounded-xl px-4 py-2 text-sm outline-none text-slate-700 bg-white"
+                  >
+                    <option value="All">All Status</option>
+                    <option value="Uploaded">Uploaded</option>
+                    <option value="Processing">Processing</option>
+                    <option value="Shortlisted">Shortlisted</option>
+                    <option value="Rejected">Rejected</option>
+                    <option value="Failed">Failed</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter(draftStatusFilter)}
+                    className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl text-sm"
+                  >
+                    <Filter size={16} />
+                    Filter
+                  </button>
+
+                  {statusFilter !== "All" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftStatusFilter("All");
+                        setStatusFilter("All");
+                      }}
+                      className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
 
               {filteredUploads.length === 0 ? (

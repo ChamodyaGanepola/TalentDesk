@@ -14,6 +14,7 @@ import {
 } from "@/app/lib/datetime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Filter } from "lucide-react";
 
 type UploadStatus =
   | "Uploaded"
@@ -115,6 +116,8 @@ export default function DashboardPage() {
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string>("latest");
   const [filterDate, setFilterDate] = useState<string>("");
+  const [draftBatchId, setDraftBatchId] = useState<string>("latest");
+  const [draftFilterDate, setDraftFilterDate] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
@@ -150,6 +153,52 @@ export default function DashboardPage() {
   useEffect(() => {
     activeBatchIdRef.current = activeBatchId;
   }, [activeBatchId]);
+
+  const draftDateFilteredBatches = useMemo(() => {
+    if (!draftFilterDate) return batches;
+    return batches.filter(
+      (batch) => toSLDateKey(batch.created_at) === draftFilterDate
+    );
+  }, [batches, draftFilterDate]);
+
+  const draftSelectedBatch = useMemo(() => {
+    const source = draftDateFilteredBatches;
+
+    if (draftBatchId === "latest") {
+      if (uploadProcessStatus === "processing" && activeBatchId) {
+        return (
+          source.find((batch) => batch.batch_id === activeBatchId) ||
+          source[0] ||
+          null
+        );
+      }
+      return source[0] || null;
+    }
+    if (draftBatchId === "all") return null;
+
+    return source.find((batch) => batch.batch_id === draftBatchId) || null;
+  }, [
+    draftDateFilteredBatches,
+    draftBatchId,
+    activeBatchId,
+    uploadProcessStatus,
+  ]);
+
+  const applyFilters = useCallback(() => {
+    setFilterDate(draftFilterDate);
+    setSelectedBatchId(draftBatchId);
+    setPage(1);
+    setDropdownOpen(false);
+  }, [draftFilterDate, draftBatchId]);
+
+  const clearFilters = useCallback(() => {
+    setDraftFilterDate("");
+    setDraftBatchId("latest");
+    setFilterDate("");
+    setSelectedBatchId("latest");
+    setPage(1);
+    setDropdownOpen(false);
+  }, []);
 
   const dateFilteredBatches = useMemo(() => {
     if (!filterDate) return batches;
@@ -702,7 +751,9 @@ export default function DashboardPage() {
           setCompletionSummary(null);
           setActiveBatchId(batchId);
           setSelectedBatchId("latest");
+          setDraftBatchId("latest");
           setFilterDate("");
+          setDraftFilterDate("");
           setPage(1);
           setUploadProcessStatus("processing");
           fetchRecentUploads({ silent: true });
@@ -735,26 +786,28 @@ export default function DashboardPage() {
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <input
               type="date"
-              value={filterDate}
-              onChange={(e) => {
-                setFilterDate(e.target.value);
-                setSelectedBatchId("latest");
-                setPage(1);
-              }}
+              value={draftFilterDate}
+              onChange={(e) => setDraftFilterDate(e.target.value)}
               className="border border-slate-300 rounded-xl px-4 py-2 text-sm bg-white text-slate-700"
               title="Filter by date"
             />
 
-            {filterDate && (
+            <button
+              type="button"
+              onClick={applyFilters}
+              className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-xl text-sm"
+            >
+              <Filter size={16} />
+              Filter
+            </button>
+
+            {(filterDate || selectedBatchId !== "latest") && (
               <button
                 type="button"
-                onClick={() => {
-                  setFilterDate("");
-                  setPage(1);
-                }}
+                onClick={clearFilters}
                 className="px-3 py-2 text-sm text-slate-600 hover:text-slate-900"
               >
-                Clear date
+                Clear
               </button>
             )}
 
@@ -765,14 +818,14 @@ export default function DashboardPage() {
                 className="w-full border border-slate-300 rounded-xl px-4 py-2 text-sm text-left bg-white text-slate-700 flex justify-between items-center"
               >
                 <span className="truncate">
-                  {selectedBatchId === "latest"
-                    ? selectedBatch
-                      ? `Latest — ${formatBatchLabel(selectedBatch, batches)}`
+                  {draftBatchId === "latest"
+                    ? draftSelectedBatch
+                      ? `Latest — ${formatBatchLabel(draftSelectedBatch, batches)}`
                       : "Latest Batch"
-                    : selectedBatchId === "all"
+                    : draftBatchId === "all"
                     ? "All Batches"
-                    : selectedBatch
-                    ? formatBatchLabel(selectedBatch, batches)
+                    : draftSelectedBatch
+                    ? formatBatchLabel(draftSelectedBatch, batches)
                     : "Select date & time"}
                 </span>
 
@@ -784,8 +837,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedBatchId("latest");
-                      setPage(1);
+                      setDraftBatchId("latest");
                       setDropdownOpen(false);
                     }}
                     className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50"
@@ -796,8 +848,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedBatchId("all");
-                      setPage(1);
+                      setDraftBatchId("all");
                       setDropdownOpen(false);
                     }}
                     className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50 border-t"
@@ -805,29 +856,28 @@ export default function DashboardPage() {
                     All Batches
                   </button>
 
-                  {dateFilteredBatches.length === 0 ? (
+                  {draftDateFilteredBatches.length === 0 ? (
                     <div className="px-4 py-3 text-sm text-slate-500 border-t">
-                      No batches{filterDate ? ` on ${filterDate}` : ""}.
+                      No batches{draftFilterDate ? ` on ${draftFilterDate}` : ""}.
                     </div>
                   ) : (
-                    dateFilteredBatches.map((batch) => (
+                    draftDateFilteredBatches.map((batch) => (
                       <button
                         key={batch.batch_id}
                         type="button"
                         onClick={() => {
-                          setSelectedBatchId(batch.batch_id);
-                          setPage(1);
+                          setDraftBatchId(batch.batch_id);
                           setDropdownOpen(false);
                         }}
                         className={`w-full text-left px-4 py-2 text-sm border-t ${
-                          selectedBatch?.batch_id === batch.batch_id
+                          draftSelectedBatch?.batch_id === batch.batch_id
                             ? "bg-cyan-50 text-cyan-800"
                             : "hover:bg-cyan-50"
                         }`}
                       >
                         <div className="font-medium">
                           {formatBatchLabel(batch, batches)}
-                          {dateFilteredBatches[0]?.batch_id === batch.batch_id
+                          {draftDateFilteredBatches[0]?.batch_id === batch.batch_id
                             ? " · Latest"
                             : ""}
                         </div>
