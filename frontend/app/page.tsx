@@ -80,7 +80,7 @@ export default function LoginPage() {
         return;
       }
 
-      if (!data.access_token || !data.refresh_token) {
+      if (!data.access_token || !data.refresh_token || !data.user) {
         setError("Login succeeded but session tokens were not returned.");
         return;
       }
