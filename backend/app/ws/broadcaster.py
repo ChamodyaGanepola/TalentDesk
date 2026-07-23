@@ -36,10 +36,10 @@ async def broadcast_stats():
 
     await manager.broadcast({
         "event": "stats_update",
-        "total": total,
-        "pending": pending,
-        "processing": processing,
-        "shortlisted": shortlisted,
-        "rejected": rejected,
-        "failed": failed
+        "total": int(total or 0),
+        "pending": int(pending or 0),
+        "processing": int(processing or 0),
+        "shortlisted": int(shortlisted or 0),
+        "rejected": int(rejected or 0),
+        "failed": int(failed or 0),
     })

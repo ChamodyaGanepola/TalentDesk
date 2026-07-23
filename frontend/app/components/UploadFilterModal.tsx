@@ -2,20 +2,23 @@
 
 import {
   Briefcase,
+  ChevronDown,
   FileText,
   GraduationCap,
   Loader2,
   Plus,
   Search,
   Sparkles,
+  UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FilterSectionSkeleton } from "@/app/components/Skeletons";
 import ConfirmDialog from "@/app/components/ui/ConfirmDialog";
 import { useToast } from "@/app/components/ui/Toast";
 import { yearsMonthsToTotalMonths } from "@/app/lib/datetime";
 import {
+  addProfessionToCache,
   addQualificationToCache,
   addSkillToCache,
   fetchMasters,
@@ -62,6 +65,81 @@ function ChipToggle({
   );
 }
 
+function DownSelect({
+  value,
+  onChange,
+  options,
+  "aria-label": ariaLabel,
+}: {
+  value: number | string;
+  onChange: (value: string) => void;
+  options: { value: string | number; label: string }[];
+  "aria-label"?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected =
+    options.find((o) => String(o.value) === String(value))?.label ??
+    String(value);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onDocClick = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full bg-white p-2.5 rounded-xl border border-slate-200 text-sm text-left flex items-center justify-between gap-2 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-400"
+      >
+        <span className="truncate">{selected}</span>
+        <ChevronDown
+          size={16}
+          className={`shrink-0 text-slate-400 transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 w-full z-20 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+          <div className="max-h-[calc(3*2.5rem)] overflow-y-auto overscroll-contain py-1">
+            {options.map((option) => {
+              const active = String(option.value) === String(value);
+              return (
+                <button
+                  key={String(option.value)}
+                  type="button"
+                  onClick={() => {
+                    onChange(String(option.value));
+                    setOpen(false);
+                  }}
+                  className={`w-full h-10 px-3 text-left text-sm hover:bg-cyan-50 ${
+                    active
+                      ? "bg-cyan-50 text-cyan-800 font-medium"
+                      : "text-slate-700"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SectionCard({
   icon: Icon,
   title,
@@ -74,7 +152,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+    <section className="rounded-2xl border border-slate-200 bg-white overflow-visible">
       <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-cyan-100 text-cyan-700 flex items-center justify-center shrink-0">
           <Icon size={18} />
@@ -105,18 +183,24 @@ export default function UploadFilterModal({
   const [qualifications, setQualifications] = useState<string[]>(
     initialCache?.qualifications ?? []
   );
+  const [professions, setProfessions] = useState<string[]>(
+    initialCache?.professions ?? []
+  );
 
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedQualifications, setSelectedQualifications] = useState<string[]>(
     []
   );
+  const [selectedProfession, setSelectedProfession] = useState("");
 
   const [skillSearch, setSkillSearch] = useState("");
   const [qualificationSearch, setQualificationSearch] = useState("");
+  const [professionSearch, setProfessionSearch] = useState("");
   const [newSkill, setNewSkill] = useState("");
   const [newQualification, setNewQualification] = useState("");
 
   const [experienceType, setExperienceType] = useState("minimum");
+  const [includeInternships, setIncludeInternships] = useState("yes");
   const [experienceYears, setExperienceYears] = useState(1);
   const [experienceMonths, setExperienceMonths] = useState(0);
 
@@ -124,6 +208,8 @@ export default function UploadFilterModal({
   const [mastersLoading, setMastersLoading] = useState(!initialCache);
   const [message, setMessage] = useState("");
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
+
+  const experienceSectionRef = useRef<HTMLDivElement | null>(null);
 
   const fileArray = files ? Array.from(files) : [];
   const totalMonths = yearsMonthsToTotalMonths(
@@ -138,10 +224,27 @@ export default function UploadFilterModal({
       ? "More than"
       : "Exactly";
 
+  const internRoleLabel = (() => {
+    const name = selectedProfession.trim();
+    if (!name) return "Intern";
+    const lower = name.toLowerCase();
+    if (
+      lower.endsWith(" intern") ||
+      lower.endsWith(" internship") ||
+      lower === "intern" ||
+      lower === "internship"
+    ) {
+      return name;
+    }
+    return `${name} Intern`;
+  })();
+
   const hasFilterChanges =
     selectedSkills.length > 0 ||
     selectedQualifications.length > 0 ||
+    Boolean(selectedProfession) ||
     experienceType !== "minimum" ||
+    includeInternships !== "yes" ||
     experienceYears !== 1 ||
     experienceMonths !== 0;
 
@@ -163,6 +266,7 @@ export default function UploadFilterModal({
         if (cancelled) return;
         setSkills(data.skills);
         setQualifications(data.qualifications);
+        setProfessions(data.professions || []);
       } catch (err) {
         if (cancelled) return;
         console.error(err);
@@ -192,10 +296,32 @@ export default function UploadFilterModal({
     return qualifications.filter((name) => name.toLowerCase().includes(q));
   }, [qualifications, qualificationSearch]);
 
+  const filteredProfessions = useMemo(() => {
+    const q = professionSearch.trim().toLowerCase();
+    if (!q) return professions;
+    return professions.filter((name) => name.toLowerCase().includes(q));
+  }, [professions, professionSearch]);
+
   const toggleSkill = (skill: string) => {
     setSelectedSkills((prev) =>
       prev.includes(skill) ? prev.filter((s) => s !== skill) : [...prev, skill]
     );
+  };
+
+  const scrollToExperience = () => {
+    requestAnimationFrame(() => {
+      experienceSectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+
+  const selectProfession = (name: string) => {
+    setSelectedProfession((prev) => (prev === name ? "" : name));
+    if (name && selectedProfession !== name) {
+      scrollToExperience();
+    }
   };
 
   const toggleQualification = (qualification: string) => {
@@ -258,6 +384,47 @@ export default function UploadFilterModal({
     }
   };
 
+  const addProfession = async (nameOverride?: string) => {
+    const name = (nameOverride ?? professionSearch).trim();
+    if (!name) return;
+
+    try {
+      const res = await fetch(`${API}/professions/add`, {
+        method: "POST",
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data?.success === false) {
+        const msg = data?.message || "Failed to add profession.";
+        setMessage(msg);
+        showToast(msg, "error");
+        return;
+      }
+
+      const savedName = String(data?.name || name).trim();
+
+      addProfessionToCache(savedName);
+      setProfessions((prev) => {
+        const exists = prev.some(
+          (p) => p.toLowerCase() === savedName.toLowerCase()
+        );
+        return exists
+          ? prev
+          : [...prev, savedName].sort((a, b) => a.localeCompare(b));
+      });
+      setSelectedProfession(savedName);
+      setProfessionSearch("");
+      showToast(`Profession "${savedName}" added.`, "success");
+      scrollToExperience();
+    } catch (err) {
+      console.error(err);
+      setMessage("Failed to add profession.");
+      showToast("Failed to add profession.", "error");
+    }
+  };
+
   const handleUpload = async () => {
     if (!files || fileArray.length === 0) {
       showToast("No files selected.", "error");
@@ -278,6 +445,8 @@ export default function UploadFilterModal({
       formData.append("skills", JSON.stringify(selectedSkills));
       formData.append("qualifications", JSON.stringify(selectedQualifications));
       formData.append("experience_type", experienceType);
+      formData.append("include_internships", includeInternships);
+      formData.append("profession", selectedProfession);
       formData.append("experience_months", String(totalMonths));
       formData.append("experience_value", String(totalMonths));
 
@@ -376,11 +545,92 @@ export default function UploadFilterModal({
           )}
 
           <SectionCard
-            icon={Briefcase}
-            title="Work experience"
-            subtitle={`${experienceLabel} ${experienceYears}y ${experienceMonths}m (${totalMonths} months total)`}
+            icon={UserRound}
+            title="Hiring position"
+            subtitle={
+              mastersLoading
+                ? "Loading options..."
+                : selectedProfession
+                ? `Looking for: ${selectedProfession} (info for AI / naming — not used in match score)`
+                : "Select the position you are hiring for (e.g. Software Engineer, QA)"
+            }
           >
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {mastersLoading ? (
+              <FilterSectionSkeleton rows={3} />
+            ) : (
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Search
+                      size={16}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+                    <input
+                      value={professionSearch}
+                      onChange={(e) => setProfessionSearch(e.target.value)}
+                      placeholder="Search or add position..."
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-400"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && professionSearch.trim()) {
+                          e.preventDefault();
+                          void addProfession(professionSearch);
+                        }
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void addProfession(professionSearch)}
+                    className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-sm font-medium transition"
+                  >
+                    <Plus size={16} />
+                    Add
+                  </button>
+                </div>
+
+                {selectedProfession ? (
+                  <div className="flex flex-wrap gap-2">
+                    <ChipToggle
+                      label={selectedProfession}
+                      selected
+                      onClick={() => selectProfession(selectedProfession)}
+                    />
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
+                  {filteredProfessions.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-2">
+                      No positions found. Type above to add one.
+                    </p>
+                  ) : (
+                    filteredProfessions
+                      .filter(
+                        (name) =>
+                          name.toLowerCase() !==
+                          selectedProfession.toLowerCase()
+                      )
+                      .map((name) => (
+                        <ChipToggle
+                          key={name}
+                          label={name}
+                          selected={false}
+                          onClick={() => selectProfession(name)}
+                        />
+                      ))
+                  )}
+                </div>
+              </div>
+            )}
+          </SectionCard>
+
+          <div ref={experienceSectionRef}>
+            <SectionCard
+              icon={Briefcase}
+              title="Work experience"
+              subtitle={`${experienceLabel} ${experienceYears}y ${experienceMonths}m (${totalMonths} months) · ${internRoleLabel} ${includeInternships === "yes" ? "included" : "excluded"}`}
+            >
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <label className="block">
                 <span className="text-xs font-medium text-slate-500 mb-1 block">
                   Requirement
@@ -398,39 +648,50 @@ export default function UploadFilterModal({
 
               <label className="block">
                 <span className="text-xs font-medium text-slate-500 mb-1 block">
-                  Years
+                  {internRoleLabel}
                 </span>
                 <select
-                  value={experienceYears}
-                  onChange={(e) => setExperienceYears(Number(e.target.value))}
+                  value={includeInternships}
+                  onChange={(e) => setIncludeInternships(e.target.value)}
                   className="w-full bg-white p-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-400"
                 >
-                  {Array.from({ length: 31 }, (_, i) => (
-                    <option key={i} value={i}>
-                      {i} {i === 1 ? "year" : "years"}
-                    </option>
-                  ))}
+                  <option value="yes">Include</option>
+                  <option value="no">Do not include</option>
                 </select>
+              </label>
+
+              <label className="block">
+                <span className="text-xs font-medium text-slate-500 mb-1 block">
+                  Years
+                </span>
+                <DownSelect
+                  aria-label="Years"
+                  value={experienceYears}
+                  onChange={(v) => setExperienceYears(Number(v))}
+                  options={Array.from({ length: 11 }, (_, i) => ({
+                    value: i,
+                    label: `${i} ${i === 1 ? "year" : "years"}`,
+                  }))}
+                />
               </label>
 
               <label className="block">
                 <span className="text-xs font-medium text-slate-500 mb-1 block">
                   Months
                 </span>
-                <select
+                <DownSelect
+                  aria-label="Months"
                   value={experienceMonths}
-                  onChange={(e) => setExperienceMonths(Number(e.target.value))}
-                  className="w-full bg-white p-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-400"
-                >
-                  {Array.from({ length: 12 }, (_, i) => (
-                    <option key={i} value={i}>
-                      {i} {i === 1 ? "month" : "months"}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setExperienceMonths(Number(v))}
+                  options={Array.from({ length: 12 }, (_, i) => ({
+                    value: i,
+                    label: `${i} ${i === 1 ? "month" : "months"}`,
+                  }))}
+                />
               </label>
             </div>
           </SectionCard>
+          </div>
 
           <SectionCard
             icon={Sparkles}

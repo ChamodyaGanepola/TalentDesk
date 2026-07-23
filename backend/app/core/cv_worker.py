@@ -1,6 +1,7 @@
 import time
 import asyncio
 import traceback
+import os
 import fitz
 
 from sqlalchemy import text
@@ -11,7 +12,13 @@ from app.services.vision_ocr import vision_ocr
 from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
 from app.services.export_service import export_batch_shortlisted
-from app.services.utils_experience import years_to_months, months_to_label, months_to_years_float
+from app.services.utils_experience import (
+    months_to_label,
+    months_to_years_float,
+    parse_include_internships,
+    resolve_experience_months,
+    years_to_months,
+)
 from app.ws.manager import manager
 from app.ws.broadcaster import broadcast_stats
 
@@ -19,19 +26,22 @@ from app.ws.broadcaster import broadcast_stats
 # =========================
 # HELPERS
 # =========================
-def parse_experience_months(extracted) -> int:
+def parse_experience_months(
+    extracted,
+    *,
+    include_internships: bool = True,
+    target_profession: str = "",
+) -> int:
+    """Resolve CV experience to months (job dates + stated years/months)."""
     if not isinstance(extracted, dict):
         return years_to_months(extracted)
 
-    if extracted.get("experience_months") is not None:
-        try:
-            months = int(extracted.get("experience_months") or 0)
-            if months > 0:
-                return months
-        except Exception:
-            pass
-
-    return years_to_months(extracted.get("experience_years"))
+    return resolve_experience_months(
+        extracted,
+        internships=extracted.get("internships"),
+        include_internships=include_internships,
+        target_profession=target_profession,
+    )
 
 
 def batch_completed(db, batch_id):
@@ -82,13 +92,40 @@ def load_batch_requirements(db, batch_id: str):
         "batch_id": batch_id
     }).fetchall()
 
-    exp_row = db.execute(text("""
-        SELECT experience_type, experience_value
-        FROM upload_batches
-        WHERE batch_id = :batch_id
-    """), {
-        "batch_id": batch_id
-    }).fetchone()
+    try:
+        exp_row = db.execute(text("""
+            SELECT experience_type, experience_value, include_internships, profession
+            FROM upload_batches
+            WHERE batch_id = :batch_id
+        """), {
+            "batch_id": batch_id
+        }).fetchone()
+        include_internships = parse_include_internships(
+            exp_row[2] if exp_row and len(exp_row) > 2 else True
+        )
+        batch_profession = str(exp_row[3] or "").strip() if exp_row and len(exp_row) > 3 else ""
+    except Exception:
+        try:
+            exp_row = db.execute(text("""
+                SELECT experience_type, experience_value, include_internships
+                FROM upload_batches
+                WHERE batch_id = :batch_id
+            """), {
+                "batch_id": batch_id
+            }).fetchone()
+            include_internships = parse_include_internships(
+                exp_row[2] if exp_row and len(exp_row) > 2 else True
+            )
+        except Exception:
+            exp_row = db.execute(text("""
+                SELECT experience_type, experience_value
+                FROM upload_batches
+                WHERE batch_id = :batch_id
+            """), {
+                "batch_id": batch_id
+            }).fetchone()
+            include_internships = True
+        batch_profession = ""
 
     skills = [r[0] for r in skills_rows] if skills_rows else []
     qualifications = [r[0] for r in quals_rows] if quals_rows else []
@@ -97,7 +134,9 @@ def load_batch_requirements(db, batch_id: str):
         "skills": skills,
         "qualifications": qualifications,
         "experience_type": exp_row[0] if exp_row else "minimum",
-        "experience_value": exp_row[1] if exp_row else 0
+        "experience_value": exp_row[1] if exp_row else 0,
+        "include_internships": include_internships,
+        "profession": batch_profession,
     }
 
 
@@ -133,10 +172,10 @@ async def handle_batch_completion(db, batch_id):
         "batch_id": batch_id
     }).mappings().first()
 
-    shortlisted_count = counts["shortlisted_count"] or 0
-    rejected_count = counts["rejected_count"] or 0
-    failed_count = counts["failed_count"] or 0
-    total_count = counts["total_count"] or 0
+    shortlisted_count = int(counts["shortlisted_count"] or 0)
+    rejected_count = int(counts["rejected_count"] or 0)
+    failed_count = int(counts["failed_count"] or 0)
+    total_count = int(counts["total_count"] or 0)
 
     existing = db.execute(text("""
         SELECT id, excel_file
@@ -157,11 +196,27 @@ async def handle_batch_completion(db, batch_id):
             f"{shortlisted_count} shortlisted / {total_count} total"
         )
 
+        batch_profession = ""
+        try:
+            row = db.execute(text("""
+                SELECT profession
+                FROM upload_batches
+                WHERE batch_id = :batch_id
+                LIMIT 1
+            """), {"batch_id": batch_id}).mappings().first()
+            batch_profession = " ".join(
+                str((row or {}).get("profession") or "").strip().split()
+            )
+            print(f"Batch profession for Excel: '{batch_profession or '(none)'}'")
+        except Exception as e:
+            print("Could not load batch profession for export:", e)
+
         try:
             export_result = export_batch_shortlisted(
                 batch_id,
                 total_cvs=total_count,
                 db=db,
+                position=batch_profession or None,
             )
         except Exception as export_error:
             print("Excel export error:", export_error)
@@ -175,6 +230,7 @@ async def handle_batch_completion(db, batch_id):
                     batch_id,
                     total_cvs=total_count,
                     db=db,
+                    position=batch_profession,
                 )
             except Exception as retry_error:
                 print("Excel export retry failed:", retry_error)
@@ -295,7 +351,7 @@ async def cv_worker_loop():
 
             if not job:
                 db.close()
-                await asyncio.sleep(2)
+                await asyncio.sleep(float(os.getenv("CV_WORKER_POLL_SEC", "2")))
                 continue
 
             job_id, batch_id, file_url, file_name = job
@@ -326,19 +382,35 @@ async def cv_worker_loop():
             required_quals = req["qualifications"]
             exp_type = req["experience_type"]
             required_exp = req["experience_value"]
+            include_internships = req.get("include_internships", True)
+            batch_profession = (req.get("profession") or "").strip()
 
             raw_text = read_file(file_url)
 
             print("Raw text length:", len(raw_text))
+            print("Include internships:", include_internships)
+            print("Batch profession:", batch_profession or "(none)")
 
             if len(raw_text.strip()) < 300:
-                extracted = vision_ocr(file_url)
+                extracted = vision_ocr(
+                    file_url,
+                    include_internships=include_internships,
+                    target_profession=batch_profession,
+                )
                 method = "vision_ocr"
             else:
-                extracted = extract_cv_text(raw_text)
+                extracted = extract_cv_text(
+                    raw_text,
+                    include_internships=include_internships,
+                    target_profession=batch_profession,
+                )
                 method = "text_ai"
 
-            cv_exp_months = parse_experience_months(extracted)
+            cv_exp_months = parse_experience_months(
+                extracted,
+                include_internships=include_internships,
+                target_profession=batch_profession,
+            )
             cv_skills = extracted.get("skills", []) or []
             cv_quals = extracted.get("qualifications", []) or []
 
@@ -384,7 +456,9 @@ async def cv_worker_loop():
                 "experience_years": months_to_years_float(cv_exp_months),
                 "experience_label": months_to_label(cv_exp_months),
                 "profession": extracted.get("profession"),
+                "batch_profession": batch_profession,
                 "internships": extracted.get("internships", []),
+                "include_internships": include_internships,
                 "file_name": file_name,
                 "file_url": file_url,
                 "status": status,
@@ -437,4 +511,4 @@ async def cv_worker_loop():
         finally:
             db.close()
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(float(os.getenv("CV_WORKER_POLL_SEC", "2")))

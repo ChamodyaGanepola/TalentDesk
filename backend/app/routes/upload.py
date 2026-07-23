@@ -48,6 +48,7 @@ from app.services.utils_experience import (
     months_to_label,
     months_to_years_float,
     normalize_requirement_months,
+    parse_include_internships,
 )
 
 
@@ -63,6 +64,8 @@ def serialize_batch_experience(experience_value):
 
 
 _experience_migrated = False
+_include_internships_ready = False
+_profession_schema_ready = False
 
 
 def ensure_experience_stored_as_months(db: Session):
@@ -106,6 +109,96 @@ def ensure_experience_stored_as_months(db: Session):
             pass
 
     _experience_migrated = True
+
+
+def ensure_include_internships_column(db: Session):
+    """Add upload_batches.include_internships if missing (default include=1)."""
+    global _include_internships_ready
+    if _include_internships_ready:
+        return
+
+    try:
+        db.execute(text("""
+            ALTER TABLE upload_batches
+            ADD COLUMN include_internships TINYINT(1) NOT NULL DEFAULT 1
+        """))
+        db.commit()
+        print("Added upload_batches.include_internships column")
+    except Exception as e:
+        # Column already exists (or non-MySQL) — safe to continue.
+        print("include_internships column ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    _include_internships_ready = True
+
+
+def ensure_profession_schema(db: Session):
+    """Professions master list + optional batch position name."""
+    global _profession_schema_ready
+    if _profession_schema_ready:
+        return
+
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS professions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                UNIQUE KEY uq_professions_name (name)
+            )
+        """))
+        db.commit()
+    except Exception as e:
+        print("professions table ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    try:
+        col = db.execute(text("""
+            SELECT COUNT(*) AS cnt
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'upload_batches'
+              AND COLUMN_NAME = 'profession'
+        """)).scalar()
+
+        if int(col or 0) == 0:
+            db.execute(text("""
+                ALTER TABLE upload_batches
+                ADD COLUMN profession VARCHAR(255) NULL
+            """))
+            db.commit()
+            print("Added upload_batches.profession column")
+    except Exception as e:
+        print("profession column ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    try:
+        exists = db.execute(text("""
+            SELECT COUNT(*) AS cnt
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'professions'
+        """)).scalar()
+        _profession_schema_ready = int(exists or 0) > 0
+        if _profession_schema_ready:
+            print("Professions master table ready")
+        else:
+            print("Professions master table missing after ensure")
+    except Exception as e:
+        print("professions schema check failed:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _profession_schema_ready = False
 
 
 # =========================
@@ -170,6 +263,41 @@ def get_or_create_qualification(db: Session, name: str):
     return row[0] if row else None
 
 
+def normalize_profession(value: str) -> str:
+    """Preserve readable casing; collapse whitespace."""
+    return " ".join(str(value or "").strip().split())
+
+
+def get_or_create_profession(db: Session, name: str) -> str | None:
+    name = normalize_profession(name)
+    if not name:
+        return None
+
+    ensure_profession_schema(db)
+
+    existing = db.execute(text("""
+        SELECT name FROM professions
+        WHERE LOWER(name) = LOWER(:name)
+        LIMIT 1
+    """), {"name": name}).fetchone()
+
+    if existing:
+        return existing[0]
+
+    db.execute(text("""
+        INSERT IGNORE INTO professions(name)
+        VALUES(:name)
+    """), {"name": name})
+
+    row = db.execute(text("""
+        SELECT name FROM professions
+        WHERE LOWER(name) = LOWER(:name)
+        LIMIT 1
+    """), {"name": name}).fetchone()
+
+    return row[0] if row else name
+
+
 # =========================
 # SKILLS MASTER
 # =========================
@@ -229,6 +357,39 @@ def get_qualifications(db: Session = Depends(get_db)):
 
 
 # =========================
+# PROFESSIONS MASTER (info only — not used in matching)
+# =========================
+@router.post("/professions/add")
+def add_profession(payload: dict = Body(...), db: Session = Depends(get_db)):
+    ensure_profession_schema(db)
+    name = get_or_create_profession(db, payload.get("name"))
+
+    if not name:
+        return {"success": False, "message": "Name required"}
+
+    db.commit()
+    return {"success": True, "name": name}
+
+
+@router.get("/professions")
+def get_professions(db: Session = Depends(get_db)):
+    ensure_profession_schema(db)
+
+    try:
+        rows = db.execute(text("""
+            SELECT name FROM professions ORDER BY name
+        """)).mappings().all()
+        return [r["name"] for r in rows]
+    except Exception as e:
+        print("get_professions error:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
+
+
+# =========================
 # BULK UPLOAD CVs
 # =========================
 @router.post("/upload/cvs")
@@ -239,6 +400,8 @@ async def upload_cvs(
     experience_type: str = Form("minimum"),
     experience_value: float = Form(0.0),
     experience_months: int | None = Form(None),
+    include_internships: str = Form("yes"),
+    profession: str = Form(""),
     db: Session = Depends(get_db)
 ):
     uploaded_files = []
@@ -246,6 +409,8 @@ async def upload_cvs(
 
     parsed_skills = safe_json(skills)
     parsed_qualifications = safe_json(qualifications)
+    include_internships_flag = parse_include_internships(include_internships)
+    batch_profession = normalize_profession(profession)
 
     valid_experience_types = {"minimum", "more_than", "exact"}
 
@@ -275,18 +440,32 @@ async def upload_cvs(
 
     try:
         ensure_experience_stored_as_months(db)
+        ensure_include_internships_column(db)
+        ensure_profession_schema(db)
+
+        if batch_profession:
+            batch_profession = get_or_create_profession(db, batch_profession) or batch_profession
 
         # =========================
         # CREATE BATCH
         # =========================
         db.execute(text("""
             INSERT INTO upload_batches
-            (batch_id, experience_type, experience_value, created_at)
-            VALUES (:batch_id, :experience_type, :experience_value, :created_at)
+            (batch_id, experience_type, experience_value, include_internships, profession, created_at)
+            VALUES (
+                :batch_id,
+                :experience_type,
+                :experience_value,
+                :include_internships,
+                :profession,
+                :created_at
+            )
         """), {
             "batch_id": batch_id,
             "experience_type": experience_type,
             "experience_value": stored_months,
+            "include_internships": 1 if include_internships_flag else 0,
+            "profession": batch_profession or None,
             "created_at": datetime.now(timezone.utc).replace(tzinfo=None)
         })
 
@@ -592,10 +771,23 @@ def regenerate_export(batch_id: str, db: Session = Depends(get_db)):
         SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
     """), {"batch_id": batch_id}).scalar() or 0
 
+    batch_profession = ""
+    try:
+        batch_profession = str(
+            db.execute(text("""
+                SELECT profession FROM upload_batches
+                WHERE batch_id = :batch_id LIMIT 1
+            """), {"batch_id": batch_id}).scalar()
+            or ""
+        ).strip()
+    except Exception:
+        batch_profession = ""
+
     export_result = export_batch_shortlisted(
         batch_id,
         total_cvs=total_count,
         db=db,
+        position=batch_profession,
     )
 
     if not export_result:
@@ -735,12 +927,16 @@ def all_stats(db: Session = Depends(get_db)):
 @router.get("/upload/batches")
 def get_batches(db: Session = Depends(get_db)):
     ensure_experience_stored_as_months(db)
+    ensure_include_internships_column(db)
+    ensure_profession_schema(db)
 
     rows = db.execute(text("""
         SELECT
             ub.batch_id,
             ub.experience_type,
             ub.experience_value,
+            ub.include_internships,
+            ub.profession,
             COALESCE(ub.created_at, MIN(u.created_at)) AS created_at,
             COUNT(u.id) AS total,
             SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
@@ -750,7 +946,7 @@ def get_batches(db: Session = Depends(get_db)):
             SUM(CASE WHEN u.status='Failed' THEN 1 ELSE 0 END) AS failed
         FROM upload_batches ub
         LEFT JOIN uploads u ON u.batch_id = ub.batch_id
-        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.created_at
+        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.created_at
         ORDER BY COALESCE(ub.created_at, MIN(u.created_at)) DESC
     """)).mappings().all()
 
@@ -758,6 +954,8 @@ def get_batches(db: Session = Depends(get_db)):
         {
             "batch_id": r["batch_id"],
             "experience_type": r["experience_type"],
+            "include_internships": parse_include_internships(r["include_internships"]),
+            "profession": r["profession"] or "",
             **serialize_batch_experience(r["experience_value"]),
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "total": r["total"] or 0,
@@ -776,12 +974,16 @@ def get_batches(db: Session = Depends(get_db)):
 @router.get("/upload/batch/{batch_id}")
 def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
     ensure_experience_stored_as_months(db)
+    ensure_include_internships_column(db)
+    ensure_profession_schema(db)
 
     batch = db.execute(text("""
         SELECT
             ub.batch_id,
             ub.experience_type,
             ub.experience_value,
+            ub.include_internships,
+            ub.profession,
             COALESCE(ub.created_at, MIN(u.created_at)) AS created_at,
             COUNT(u.id) AS total,
             SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
@@ -792,7 +994,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
         FROM upload_batches ub
         LEFT JOIN uploads u ON u.batch_id = ub.batch_id
         WHERE ub.batch_id = :batch_id
-        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.created_at
+        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.created_at
     """), {
         "batch_id": batch_id
     }).mappings().first()
@@ -860,6 +1062,10 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
         "batch": {
             "batch_id": batch["batch_id"],
             "experience_type": batch["experience_type"],
+            "include_internships": parse_include_internships(
+                batch.get("include_internships")
+            ),
+            "profession": batch.get("profession") or "",
             **serialize_batch_experience(batch["experience_value"]),
             "created_at": batch["created_at"].isoformat() if batch["created_at"] else None,
             "total": batch["total"] or 0,

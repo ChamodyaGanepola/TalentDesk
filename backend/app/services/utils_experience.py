@@ -73,6 +73,67 @@ def years_to_months(years) -> int:
     return int(round(value * 12))
 
 
+def stated_experience_months(data: dict | None) -> int:
+    """
+    Best effort from AI/model numeric fields only.
+    - Prefer positive experience_months
+    - Also consider experience_years (e.g. years=5, months=0 → 60)
+    """
+    if not isinstance(data, dict):
+        return 0
+
+    candidates: list[int] = []
+
+    raw_months = data.get("experience_months")
+    if raw_months is not None:
+        try:
+            months = int(round(float(raw_months)))
+            if months > 0:
+                candidates.append(months)
+        except Exception:
+            pass
+
+    raw_years = data.get("experience_years")
+    if raw_years is not None:
+        converted = years_to_months(raw_years)
+        if converted > 0:
+            candidates.append(converted)
+
+    return max(candidates) if candidates else 0
+
+
+def resolve_experience_months(
+    data: dict | None = None,
+    *,
+    internships=None,
+    include_internships: bool = True,
+    target_profession: str = "",
+) -> int:
+    """
+    Canonical total experience in months.
+
+    Uses the maximum of:
+    1) months recomputed from job/internship date ranges
+    2) stated experience_months / experience_years from extraction
+
+    This avoids undercounting when dates fail to parse but the model
+    still reported years (e.g. experience_years=5, experience_months=0).
+    """
+    data = data if isinstance(data, dict) else {}
+    jobs = internships if internships is not None else data.get("internships")
+
+    calculated = 0
+    if jobs:
+        calculated = calculate_experience_months(
+            jobs,
+            include_internships=include_internships,
+            target_profession=target_profession,
+        )
+
+    stated = stated_experience_months(data)
+    return max(int(calculated or 0), int(stated or 0))
+
+
 def months_to_label(total_months) -> str:
     try:
         months = int(total_months or 0)
@@ -137,6 +198,14 @@ ALLOWED_WORK_TYPES = {
     "apprentice",
 }
 
+INTERNSHIP_WORK_TYPES = {
+    "internship",
+    "intern",
+    "trainee",
+    "apprenticeship",
+    "apprentice",
+}
+
 EXCLUDED_WORK_TYPES = {
     "project",
     "projects",
@@ -158,6 +227,88 @@ EXCLUDED_WORK_TYPES = {
 
 def _normalize_type(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def is_internship_entry(entry) -> bool:
+    """True when the work entry is an internship/trainee-style role."""
+    if not isinstance(entry, dict):
+        return False
+
+    job_type = _normalize_type(entry.get("type"))
+    if job_type in INTERNSHIP_WORK_TYPES:
+        return True
+
+    role = _normalize_type(entry.get("role") or entry.get("title"))
+    return "intern" in role and "internal" not in role
+
+
+def profession_intern_label(profession: str) -> str:
+    """
+    Hiring position → related intern title.
+    Software Engineer → Software Engineer Intern
+    Software Engineer Intern → Software Engineer Intern (same, no double Intern)
+    """
+    name = " ".join(str(profession or "").strip().split())
+    if not name:
+        return "Intern"
+    lower = name.lower()
+    if (
+        lower.endswith(" intern")
+        or lower.endswith(" internship")
+        or lower in {"intern", "internship", "trainee"}
+    ):
+        return name
+    return f"{name} Intern"
+
+
+def base_profession_for_intern_match(profession: str) -> str:
+    """Strip trailing Intern/Internship so SE Intern matches SE Intern roles."""
+    name = " ".join(str(profession or "").strip().split())
+    lower = name.lower()
+    for suffix in (" internship", " intern", " trainee"):
+        if lower.endswith(suffix):
+            return name[: -len(suffix)].strip()
+    return name
+
+
+def internship_matches_profession(entry, profession: str) -> bool:
+    """
+    Whether an internship relates to the target hiring position.
+    Software Engineer → Software Engineer Intern
+    Software Engineer Intern → same intern experience (not Intern Intern)
+    """
+    if not isinstance(entry, dict):
+        return False
+    if not is_internship_entry(entry):
+        return False
+
+    profession = " ".join(str(profession or "").strip().split())
+    if not profession:
+        return True
+
+    role = _normalize_type(entry.get("role") or entry.get("title"))
+    company = _normalize_type(entry.get("company") or entry.get("organization"))
+    blob = f"{role} {company}"
+    prof = profession.lower()
+    base = base_profession_for_intern_match(profession).lower()
+
+    if prof in blob or (base and base in blob):
+        return True
+
+    # Prefer base tokens (without trailing "intern") so "Software Engineer Intern"
+    # matches roles like "Software Engineer Intern" / "SE Intern".
+    match_text = base or prof
+    tokens = [t for t in re.split(r"[^a-z0-9]+", match_text) if len(t) >= 2]
+    skip = {"the", "and", "of", "for", "a", "an", "intern", "internship", "trainee"}
+    meaningful = [t for t in tokens if t not in skip]
+
+    if meaningful and all(t in blob for t in meaningful):
+        return True
+
+    if len(meaningful) == 1 and meaningful[0] in blob.split():
+        return True
+
+    return False
 
 
 def is_job_or_internship(entry) -> bool:
@@ -211,15 +362,44 @@ def filter_jobs_and_internships(entries) -> list:
     return [entry for entry in entries if is_job_or_internship(entry)]
 
 
-def calculate_experience_months(internships) -> int:
+def parse_include_internships(value) -> bool:
     """
-    Counts only internships and jobs.
-    Projects and other non-work items are ignored.
-    Returns total experience in whole months.
+    Batch/UI flag: whether internship months count toward experience.
+    Default True for backward compatibility.
+    """
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"0", "false", "no", "n", "exclude", "excluded", "off"}:
+        return False
+    if text in {"1", "true", "yes", "y", "include", "included", "on"}:
+        return True
+    return True
+
+
+def calculate_experience_months(
+    internships,
+    include_internships: bool = True,
+    target_profession: str = "",
+) -> int:
+    """
+    Counts jobs always.
+    Counts internships only when include_internships is True.
+    When target_profession is set, only profession-related internships count
+    (e.g. Software Engineer → Software Engineer Intern).
     """
     total_months = 0
+    profession = " ".join(str(target_profession or "").strip().split())
 
     for job in filter_jobs_and_internships(internships):
+        if is_internship_entry(job):
+            if not include_internships:
+                continue
+            if profession and not internship_matches_profession(job, profession):
+                continue
+
         start = parse_date(job.get("start_date"))
         end = parse_date(job.get("end_date"))
 
@@ -228,18 +408,38 @@ def calculate_experience_months(internships) -> int:
 
         if not end:
             end = now_sri_lanka().replace(tzinfo=None)
+        else:
+            # Year-only end dates parse as Jan 1; treat as end of that year.
+            end_raw = str(job.get("end_date") or "").strip()
+            if re.fullmatch(r"\d{4}", end_raw):
+                end = end.replace(month=12, day=31)
 
         diff_months = (end.year - start.year) * 12 + (end.month - start.month)
-
-        if diff_months > 0:
-            total_months += diff_months
+        # Inclusive-ish month span: Jan 2020 → Jan 2021 ≈ 12 months.
+        if diff_months >= 0:
+            total_months += max(diff_months, 1) if start != end else 1
+        # keep previous behavior for inverted ranges: skip
+        elif diff_months < 0:
+            continue
 
     return int(total_months)
 
 
-def calculate_experience(internships):
+def calculate_experience(
+    internships,
+    include_internships: bool = True,
+    target_profession: str = "",
+):
     """
     Backward-compatible helper that returns years as a float.
     Prefer calculate_experience_months() for storage.
     """
-    return round(calculate_experience_months(internships) / 12, 2)
+    return round(
+        calculate_experience_months(
+            internships,
+            include_internships=include_internships,
+            target_profession=target_profession,
+        )
+        / 12,
+        2,
+    )

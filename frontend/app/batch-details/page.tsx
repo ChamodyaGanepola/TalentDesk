@@ -32,6 +32,8 @@ type Batch = {
   experience_value: number;
   experience_months?: number;
   experience_label?: string | null;
+  include_internships?: boolean;
+  profession?: string;
   created_at: string | null;
   total: number;
   pending: number;
@@ -233,7 +235,12 @@ function BatchDetailsContent() {
                     Back to Dashboard
                   </button>
 
-                  <h1 className="text-3xl font-bold">Batch Details</h1>
+                  <h1 className="text-3xl font-bold">
+                    Batch Details
+                    {batch.profession?.trim()
+                      ? ` — ${batch.profession.trim()}`
+                      : ""}
+                  </h1>
 
                   <p className="text-sm text-slate-500 mt-2">
                     Uploaded: {formatSLDateTime(batch.created_at)}
@@ -321,7 +328,16 @@ function BatchDetailsContent() {
             <div className="bg-white rounded-3xl p-6 shadow-sm">
               <h2 className="text-xl font-semibold mb-5">Screening Filters</h2>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+                <div>
+                  <p className="text-sm text-slate-500 mb-2">Position</p>
+                  <p className="font-medium">
+                    {batch.profession?.trim()
+                      ? batch.profession
+                      : "Not specified"}
+                  </p>
+                </div>
+
                 <div>
                   <p className="text-sm text-slate-500 mb-2">Experience</p>
                   <p className="font-medium">
@@ -330,6 +346,30 @@ function BatchDetailsContent() {
                       formatExperienceFromMonths(
                         batch.experience_months ?? batch.experience_value
                       )}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-sm text-slate-500 mb-2">
+                    {(() => {
+                      const name = (batch.profession || "").trim();
+                      if (!name) return "Internships";
+                      const lower = name.toLowerCase();
+                      if (
+                        lower.endsWith(" intern") ||
+                        lower.endsWith(" internship") ||
+                        lower === "intern" ||
+                        lower === "internship"
+                      ) {
+                        return name;
+                      }
+                      return `${name} Intern`;
+                    })()}
+                  </p>
+                  <p className="font-medium">
+                    {batch.include_internships === false
+                      ? "Excluded from experience"
+                      : "Included in experience"}
                   </p>
                 </div>
 

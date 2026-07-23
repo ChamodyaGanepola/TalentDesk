@@ -55,6 +55,15 @@ async def startup():
     try:
         init_auth_db(db)
         print("Auth tables ready")
+
+        from app.routes.upload import (
+            ensure_include_internships_column,
+            ensure_profession_schema,
+        )
+
+        ensure_include_internships_column(db)
+        ensure_profession_schema(db)
+        print("Profession / internship schema ready")
     finally:
         db.close()
 
@@ -72,7 +81,16 @@ async def dashboard_ws(websocket: WebSocket):
 
     try:
         while True:
-            await websocket.receive_text()
+            # Keep the socket open even when the client only listens.
+            # A periodic timeout prevents the handler from looking "stuck"
+            # and lets broadcasts continue reliably.
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"event": "ping"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:

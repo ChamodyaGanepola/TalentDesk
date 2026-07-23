@@ -58,6 +58,10 @@ type BatchItem = {
   batch_id: string;
   experience_type: string;
   experience_value: number;
+  experience_months?: number;
+  experience_label?: string | null;
+  include_internships?: boolean;
+  profession?: string;
   created_at: string | null;
   total: number;
   pending: number;
@@ -94,9 +98,11 @@ function getBatchNumberOnDate(batch: BatchItem, allBatches: BatchItem[]) {
 
 function formatBatchLabel(batch: BatchItem, allBatches: BatchItem[]) {
   const batchNo = getBatchNumberOnDate(batch, allBatches);
+  const position = (batch.profession || "").trim();
+  const positionPart = position ? ` | ${position}` : "";
   return `${formatSLDate(batch.created_at)} | ${formatSLTime(
     batch.created_at
-  )} | ${batch.total} CVs | Batch-${batchNo}`;
+  )} | ${batch.total} CVs | Batch-${batchNo}${positionPart}`;
 }
 
 function resolveUploadApiFilters(
@@ -230,12 +236,21 @@ export default function DashboardPage() {
   ]);
 
   const applyFilters = useCallback(() => {
-    setFilterDate(draftFilterDate);
-    setSelectedBatchId(draftBatchId);
+    const nextDate = draftFilterDate;
+    const nextBatch = draftBatchId;
+
+    setFilterDate(nextDate);
+    setSelectedBatchId(nextBatch);
     setCursorStack([null]);
     setDropdownOpen(false);
+
+    // If filters are unchanged (e.g. already on Latest), still force a refetch.
+    if (nextDate === filterDate && nextBatch === selectedBatchId) {
+      fetchRecentUploadsRef.current({ cursor: null });
+    }
+
     showToast("Filters applied.", "success");
-  }, [draftFilterDate, draftBatchId, showToast]);
+  }, [draftFilterDate, draftBatchId, filterDate, selectedBatchId, showToast]);
 
   const clearFilters = useCallback(() => {
     setDraftFilterDate("");
@@ -275,6 +290,21 @@ export default function DashboardPage() {
     selectedBatchId,
     activeBatchId,
     uploadProcessStatus,
+  ]);
+
+  // Resolved batch id for "latest" — used to refetch once batches have loaded.
+  const resolvedLatestBatchId = useMemo(() => {
+    if (selectedBatchId !== "latest") return null;
+    if (uploadProcessStatus === "processing" && activeBatchId) {
+      return activeBatchId;
+    }
+    return dateFilteredBatches[0]?.batch_id || batches[0]?.batch_id || null;
+  }, [
+    selectedBatchId,
+    uploadProcessStatus,
+    activeBatchId,
+    dateFilteredBatches,
+    batches,
   ]);
 
   const fetchRecentUploads = useCallback(
@@ -584,7 +614,8 @@ export default function DashboardPage() {
       silent: initialUploadsLoadedRef.current,
     });
     initialUploadsLoadedRef.current = true;
-  }, [filterDate, selectedBatchId]);
+    // Re-run when "latest" resolves after batches load, or when filters change.
+  }, [filterDate, selectedBatchId, resolvedLatestBatchId]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -915,62 +946,66 @@ export default function DashboardPage() {
               </button>
 
               {dropdownOpen && (
-                <div className="absolute left-0 top-full mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-xl z-[9999] max-h-72 overflow-y-auto">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDraftBatchId("latest");
-                      setDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50"
-                  >
-                    Latest Batch
-                  </button>
+                <div className="absolute left-0 top-full mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
+                  <div className="max-h-[calc(3*3.25rem)] overflow-y-auto overscroll-contain">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftBatchId("latest");
+                        setDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-sm hover:bg-cyan-50"
+                    >
+                      Latest Batch
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDraftBatchId("all");
-                      setDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-4 py-2 text-sm hover:bg-cyan-50 border-t"
-                  >
-                    All Batches
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftBatchId("all");
+                        setDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-sm hover:bg-cyan-50 border-t"
+                    >
+                      All Batches
+                    </button>
 
-                  {draftDateFilteredBatches.length === 0 ? (
-                    <div className="px-4 py-3 text-sm text-slate-500 border-t">
-                      No batches{draftFilterDate ? ` on ${draftFilterDate}` : ""}.
-                    </div>
-                  ) : (
-                    draftDateFilteredBatches.map((batch) => (
-                      <button
-                        key={batch.batch_id}
-                        type="button"
-                        onClick={() => {
-                          setDraftBatchId(batch.batch_id);
-                          setDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-4 py-2 text-sm border-t ${
-                          draftSelectedBatch?.batch_id === batch.batch_id
-                            ? "bg-cyan-50 text-cyan-800"
-                            : "hover:bg-cyan-50"
-                        }`}
-                      >
-                        <div className="font-medium">
-                          {formatBatchLabel(batch, batches)}
-                          {draftDateFilteredBatches[0]?.batch_id === batch.batch_id
-                            ? " · Latest"
-                            : ""}
-                        </div>
+                    {draftDateFilteredBatches.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-slate-500 border-t">
+                        No batches
+                        {draftFilterDate ? ` on ${draftFilterDate}` : ""}.
+                      </div>
+                    ) : (
+                      draftDateFilteredBatches.map((batch) => (
+                        <button
+                          key={batch.batch_id}
+                          type="button"
+                          onClick={() => {
+                            setDraftBatchId(batch.batch_id);
+                            setDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-sm border-t ${
+                            draftSelectedBatch?.batch_id === batch.batch_id
+                              ? "bg-cyan-50 text-cyan-800"
+                              : "hover:bg-cyan-50"
+                          }`}
+                        >
+                          <div className="font-medium truncate">
+                            {formatBatchLabel(batch, batches)}
+                            {draftDateFilteredBatches[0]?.batch_id ===
+                            batch.batch_id
+                              ? " · Latest"
+                              : ""}
+                          </div>
 
-                        <div className="text-xs text-slate-500">
-                          {batch.shortlisted} shortlisted, {batch.rejected}{" "}
-                          rejected
-                        </div>
-                      </button>
-                    ))
-                  )}
+                          <div className="text-xs text-slate-500">
+                            {batch.shortlisted} shortlisted, {batch.rejected}{" "}
+                            rejected
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
             </div>

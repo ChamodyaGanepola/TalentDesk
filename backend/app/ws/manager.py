@@ -16,11 +16,21 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         dead_connections = []
+        event = message.get("event") if isinstance(message, dict) else None
+        print(
+            f"WS broadcast event={event!r} "
+            f"clients={len(self.active_connections)}"
+        )
 
-        for connection in self.active_connections:
+        for connection in list(self.active_connections):
             try:
                 await connection.send_json(message)
-            except Exception:
+            except Exception as e:
+                print(f"WS broadcast send failed ({event}): {e}")
+                # Drop only broken sockets, not serialization bugs on a live client.
+                msg = str(e).lower()
+                if "serializable" in msg or "not json" in msg:
+                    continue
                 dead_connections.append(connection)
 
         for connection in dead_connections:

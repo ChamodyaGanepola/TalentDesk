@@ -1,7 +1,7 @@
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from app.db_mongo import cv_collection
-from app.services.utils_experience import years_to_months
+from app.services.utils_experience import resolve_experience_months
 from app.services.timezone_sl import now_sri_lanka, now_utc_naive, to_sri_lanka
 from datetime import datetime
 from sqlalchemy import text
@@ -65,28 +65,62 @@ def get_batch_number_for_day(db, batch_id: str, batch_created_at: datetime | Non
         return 1
 
 
+def slug_position(position: str) -> str:
+    """Safe filename fragment from hiring position, e.g. Software Engineer → Software-Engineer."""
+    text = " ".join(str(position or "").strip().split())
+    if not text:
+        return ""
+    text = re.sub(r"[^\w\s\-]+", "", text, flags=re.UNICODE)
+    text = re.sub(r"[-\s]+", "-", text).strip("-_")
+    return text[:60]
+
+
 def build_excel_filename(
     cv_count: int,
     batch_no: int = 1,
     when: datetime | None = None,
+    position: str = "",
 ) -> str:
-    """e.g. 2026-07-22-113045-Batch-1-1CVs.xlsx (Sri Lanka time)"""
+    """e.g. 2026-07-22-113045-Batch-1-Software-Engineer-1CVs.xlsx"""
     stamp = to_sri_lanka(when) if when else now_sri_lanka()
     date_part = stamp.strftime("%Y-%m-%d")
     time_part = stamp.strftime("%H%M%S")
     count = max(int(cv_count or 0), 0)
     batch_label = f"Batch-{max(int(batch_no or 1), 1)}"
+    position_slug = slug_position(position)
+    if position_slug:
+        return f"{date_part}-{time_part}-{batch_label}-{position_slug}-{count}CVs.xlsx"
     return f"{date_part}-{time_part}-{batch_label}-{count}CVs.xlsx"
 
 
-def candidate_experience_months(candidate: dict) -> int:
-    if candidate.get("experience_months") is not None:
-        try:
-            return max(int(candidate.get("experience_months") or 0), 0)
-        except Exception:
-            pass
+def sanitize_excel_filename(file_name: str, position: str = "") -> str:
+    """
+    Keep a safe Windows filename while preserving the position slug.
+    """
+    position_slug = slug_position(position)
+    # Allow letters, digits, dot, hyphen, underscore only.
+    cleaned = re.sub(r"[^\w.\-]+", "_", file_name, flags=re.UNICODE)
+    cleaned = re.sub(r"_+", "_", cleaned)
 
-    return years_to_months(candidate.get("experience_years", 0))
+    # Guarantee batch profession appears in the filename when present.
+    if position_slug and position_slug.lower() not in cleaned.lower():
+        if re.search(r"-\d+CVs\.xlsx$", cleaned, flags=re.IGNORECASE):
+            cleaned = re.sub(
+                r"-(\d+CVs\.xlsx)$",
+                rf"-{position_slug}-\1",
+                cleaned,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            base, ext = os.path.splitext(cleaned)
+            cleaned = f"{base}-{position_slug}{ext or '.xlsx'}"
+
+    return cleaned
+
+
+def candidate_experience_months(candidate: dict) -> int:
+    return resolve_experience_months(candidate)
 
 
 def _is_shortlisted(status) -> bool:
@@ -210,12 +244,63 @@ def export_batch_shortlisted(
     batch_no: int | None = None,
     when: datetime | None = None,
     db=None,
+    position: str | None = None,
 ):
     candidates = load_shortlisted_candidates(batch_id, db=db)
 
     if not candidates:
         print(f"Export skipped: no shortlisted candidates for batch {batch_id}")
         return None
+
+    batch_profession = " ".join(str(position or "").strip().split())
+
+    # Always prefer the batch's saved hiring position from MySQL.
+    owned_db = False
+    lookup_db = db
+    if lookup_db is None:
+        try:
+            from app.db_mysql import SessionLocal
+
+            lookup_db = SessionLocal()
+            owned_db = True
+        except Exception as e:
+            print("Batch profession DB open error:", e)
+            lookup_db = None
+
+    if lookup_db is not None:
+        try:
+            row = lookup_db.execute(text("""
+                SELECT profession
+                FROM upload_batches
+                WHERE batch_id = :batch_id
+                LIMIT 1
+            """), {"batch_id": batch_id}).mappings().first()
+            db_profession = " ".join(
+                str((row or {}).get("profession") or "").strip().split()
+            )
+            if db_profession:
+                batch_profession = db_profession
+        except Exception as e:
+            print("Batch profession lookup error:", e)
+        finally:
+            if owned_db:
+                try:
+                    lookup_db.close()
+                except Exception:
+                    pass
+
+    if not batch_profession:
+        for candidate in candidates:
+            value = (
+                candidate.get("batch_profession")
+                or candidate.get("target_profession")
+                or ""
+            )
+            if value:
+                batch_profession = " ".join(str(value).strip().split())
+                break
+
+    print(f"Excel position suffix source: '{batch_profession or '(none)'}'")
 
     stamp = to_sri_lanka(when) if when else now_sri_lanka()
 
@@ -228,13 +313,15 @@ def export_batch_shortlisted(
 
     headers = [
         "No",
+        "Position",
         "Name",
         "CV File",
         "Email Address",
         "Contact No",
         "Skills",
         "Total Work Experience (months)",
-        "Professional Qualifications"
+        "Professional Qualifications",
+        "CV Profession",
     ]
 
     ws.append(headers)
@@ -247,13 +334,17 @@ def export_batch_shortlisted(
 
         ws.append([
             index,
+            batch_profession
+            or candidate.get("batch_profession", "")
+            or "",
             candidate.get("name", "") or "",
             candidate.get("file_name", "") or "",
             candidate.get("email", "") or "",
             candidate.get("contact_no", "") or "",
             safe_join(candidate.get("skills", [])),
             months,
-            safe_join(candidate.get("qualifications", []))
+            safe_join(candidate.get("qualifications", [])),
+            candidate.get("profession", "") or "",
         ])
 
     ws.freeze_panes = "A2"
@@ -271,8 +362,13 @@ def export_batch_shortlisted(
 
     # Filename uses total CVs in the batch; sheet rows = shortlisted only.
     cv_count = total_cvs if total_cvs is not None else len(candidates)
-    file_name = build_excel_filename(cv_count, batch_no=batch_no, when=stamp)
-    file_name = re.sub(r"[^\w.\-]+", "_", file_name)
+    file_name = build_excel_filename(
+        cv_count,
+        batch_no=batch_no,
+        when=stamp,
+        position=batch_profession,
+    )
+    file_name = sanitize_excel_filename(file_name, position=batch_profession)
     file_path = os.path.join(EXPORT_DIR, file_name)
 
     if os.path.exists(file_path):
@@ -280,11 +376,17 @@ def export_batch_shortlisted(
         file_name = f"{base}_{batch_id[:8]}{ext}"
         file_path = os.path.join(EXPORT_DIR, file_name)
 
+    if batch_profession and slug_position(batch_profession).lower() not in file_name.lower():
+        raise RuntimeError(
+            f"Excel filename missing batch position '{batch_profession}': {file_name}"
+        )
+
     wb.save(file_path)
 
     print(
         f"Excel generated: {file_name} "
-        f"({len(candidates)} shortlisted row(s), batch total {cv_count} CV(s))"
+        f"(position='{batch_profession or ''}', "
+        f"{len(candidates)} shortlisted row(s), batch total {cv_count} CV(s))"
     )
 
     return {

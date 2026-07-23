@@ -3,9 +3,10 @@ import json
 import re
 from openai import OpenAI
 from app.services.utils_experience import (
-    calculate_experience_months,
     filter_jobs_and_internships,
-    years_to_months,
+    parse_include_internships,
+    profession_intern_label,
+    resolve_experience_months,
 )
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -54,14 +55,40 @@ def default_cv_result():
     }
 
 
-def extract_cv_text(text: str):
+def extract_cv_text(text: str, include_internships: bool = True, target_profession: str = ""):
     """
     Extract CV information from text-based PDF content.
-    Experience is finally calculated in Python from internships/jobs.
+    Experience is finally calculated in Python from jobs
+    (and internships only when include_internships is True).
+    target_profession is informational context only — not used for matching.
     """
 
     if not text or not text.strip():
         return default_cv_result()
+
+    include_internships = parse_include_internships(include_internships)
+    target = " ".join(str(target_profession or "").strip().split())
+    intern_label = profession_intern_label(target)
+    internship_policy = (
+        f'INCLUDE "{intern_label}" experience in months. Count internship '
+        f"entries whose role relates to \"{target or 'the target position'}\" "
+        "(and generic internships for that track). Jobs always count."
+        if include_internships
+        else f'DO NOT include "{intern_label}" (or other internship) months. '
+        "Still extract internship entries with type \"internship\", but only "
+        'type "job" counts toward experience. Python enforces this.'
+    )
+    profession_context = (
+        f'Target hiring position for this batch: "{target}". '
+        "This is informational only for screening context and naming "
+        f'(related intern title: "{intern_label}"). '
+        "Still extract the candidate's own profession/title from the CV. "
+        "Do NOT reject or filter the CV based on title match. "
+        "Matching is done separately on skills, qualifications, and experience only."
+        if target
+        else "No target hiring position was specified for this batch. "
+        "Extract the candidate's profession/title from the CV if available."
+    )
 
     try:
         response = client.chat.completions.create(
@@ -71,12 +98,12 @@ def extract_cv_text(text: str):
             messages=[
                 {
                     "role": "system",
-                    "content": """
+                    "content": f"""
 You are a professional CV extraction engine for recruitment screening.
 
 Return JSON ONLY in this format:
 
-{
+{{
   "name": "",
   "email": "",
   "contact_no": "",
@@ -86,7 +113,7 @@ Return JSON ONLY in this format:
   "qualifications": [],
   "profession": "",
   "internships": []
-}
+}}
 
 RULES:
 
@@ -96,19 +123,17 @@ RULES:
 - Include skills from work, internships, projects, and technical summary sections.
 - Normalize skills to lowercase.
 - Remove duplicates.
-- IMPORTANT: Treat differently named but equivalent skills as the SAME skill.
-  Always return the most common canonical skill name, and do not list aliases separately.
-  Examples:
+- Canonicalize ONLY when it is the SAME technology with different spelling/punctuation/abbreviation.
+  Return one common industry name; do not list aliases twice.
+  Safe merges:
   - js, javascript, java script -> javascript
   - ts, typescript -> typescript
   - react, reactjs, react.js, react js -> react
   - next, nextjs, next.js -> next.js
   - node, nodejs, node.js -> node.js
   - vue, vuejs, vue.js -> vue.js
-  - angularjs, angular.js, angular 2+ -> angular
   - express, expressjs, express.js -> express
-  - csharp, c sharp, c-sharp, .net c# -> c#
-  - dotnet, .net core, asp.net, asp.net core -> .net
+  - csharp, c sharp, c-sharp -> c#
   - postgres, postgresql, postgre sql -> postgresql
   - mongo, mongodb, mongo db -> mongodb
   - mssql, sql server, microsoft sql server -> sql server
@@ -119,9 +144,18 @@ RULES:
   - azure, microsoft azure -> azure
   - k8s, kubernetes -> kubernetes
   - ci/cd, cicd -> ci/cd
-  - github actions, gitlab ci -> keep as written if distinct tools, otherwise normalize obvious synonyms
-- If a skill is clearly the same technology with punctuation/spacing/version differences, merge into one canonical name.
-- Prefer short standard industry names over marketing/versioned names (e.g. "react" not "react 18").
+- NEVER merge different technologies, even if related or similar-sounding.
+  Keep these SEPARATE (examples):
+  - java ≠ javascript ≠ typescript
+  - react ≠ react native ≠ next.js ≠ vue ≠ angular ≠ nestjs
+  - angularjs (1.x) ≠ angular (2+)
+  - mysql ≠ postgresql ≠ mongodb ≠ sql server
+  - aws ≠ azure ≠ gcp
+  - docker ≠ kubernetes
+  - c ≠ c++ ≠ c#
+  - github actions ≠ gitlab ci (distinct tools — keep both if both appear)
+- Prefer short standard names over versioned names of the SAME tech (react not react 18).
+- If unsure whether two names are the same technology, keep them as separate skills.
 
 2. EXPERIENCE:
 - Do not calculate final experience yourself.
@@ -129,18 +163,20 @@ RULES:
 - NEVER include personal projects, academic projects, university projects, assignments, coursework, hackathons, or capstone work in internships.
 - Projects may still contribute skills, but they must NOT appear in internships and must NOT affect experience.
 - Set type to exactly "internship" or "job" for every work entry.
+- Always extract internships when present, even if they will not count toward months.
+- INTERNSHIP EXPERIENCE POLICY FOR THIS BATCH: {internship_policy}
 - If a CV only lists projects and no jobs/internships, leave internships as [] and experience_years/experience_months as 0.
-- Python recalculates total months from internship/job entries only.
+- Python recalculates total months from work entries according to the internship policy above.
 
 3. INTERNSHIPS/JOBS FORMAT:
 [
-  {
+  {{
     "type": "internship" or "job",
     "company": "",
     "role": "",
     "start_date": "YYYY-MM or YYYY or Month YYYY",
     "end_date": "YYYY-MM or YYYY or Month YYYY or present"
-  }
+  }}
 ]
 
 4. QUALIFICATIONS:
@@ -149,6 +185,7 @@ RULES:
 
 5. PROFESSION:
 - Extract current role/title if available.
+- SCREENING POSITION CONTEXT: {profession_context}
 
 6. CONTACT:
 - Extract primary phone/mobile number exactly as written.
@@ -178,10 +215,13 @@ OUTPUT:
 
         # Only jobs/internships count — drop projects and other non-work items.
         internships = filter_jobs_and_internships(extracted.get("internships", []))
-        calculated_months = calculate_experience_months(internships)
-
-        # Experience months come only from jobs/internships date ranges.
-        final_months = calculated_months
+        # Prefer date-derived months, but never discard stated years (e.g. years=5, months=0).
+        final_months = resolve_experience_months(
+            extracted,
+            internships=internships,
+            include_internships=include_internships,
+            target_profession=target,
+        )
 
         return {
             "name": str(extracted.get("name") or "").strip(),
@@ -192,7 +232,8 @@ OUTPUT:
             "experience_years": round(final_months / 12, 2),
             "qualifications": clean_list(extracted.get("qualifications", []), lowercase=False),
             "profession": str(extracted.get("profession") or "").strip(),
-            "internships": internships
+            "internships": internships,
+            "include_internships": include_internships,
         }
 
     except Exception as e:

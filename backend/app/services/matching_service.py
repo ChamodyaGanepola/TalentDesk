@@ -1,8 +1,7 @@
 from app.services.vector_service import get_embedding, cosine_similarity
 from app.services.qualification_ai import normalize_and_match_qualifications
 from app.services.skill_ai import normalize_and_match_skills
-from app.services.utils_experience import years_to_months
-from difflib import get_close_matches
+from app.services.utils_experience import resolve_experience_months
 from sqlalchemy import text
 from app.db_mysql import SessionLocal
 
@@ -168,14 +167,11 @@ def normalize_skill(skill: str) -> str:
 
 # =========================
 # FALLBACK SKILL MATCH
-# (synonym map + fuzzy + embeddings)
+# Used ONLY when OpenAI is unavailable.
+# Strict: known aliases + exact canonical equality.
+# No embeddings / substring (those false-match java↔javascript, aws↔azure, etc.).
 # =========================
-def skill_match_fallback(
-    cv_skills,
-    required_skills,
-    fuzzy_threshold=0.8,
-    semantic_threshold=0.70
-):
+def skill_match_fallback(cv_skills, required_skills):
     cv_skills_normalized = {
         normalize_skill(skill)
         for skill in cv_skills
@@ -197,59 +193,13 @@ def skill_match_fallback(
     if not cv_skills_normalized:
         return False
 
-    cv_embedding_cache = {}
-
-    for req_skill in required_skills_normalized:
-        if req_skill in cv_skills_normalized:
-            continue
-
-        fuzzy_matches = get_close_matches(
-            req_skill,
-            list(cv_skills_normalized),
-            n=1,
-            cutoff=fuzzy_threshold
-        )
-
-        if fuzzy_matches:
-            continue
-
-        substring_found = any(
-            req_skill in cv_skill or cv_skill in req_skill
-            for cv_skill in cv_skills_normalized
-        )
-
-        if substring_found:
-            continue
-
-        try:
-            req_vec = get_embedding(req_skill)
-            semantic_found = False
-
-            for cv_skill in cv_skills_normalized:
-                if cv_skill not in cv_embedding_cache:
-                    cv_embedding_cache[cv_skill] = get_embedding(cv_skill)
-
-                cv_vec = cv_embedding_cache[cv_skill]
-
-                if cosine_similarity(req_vec, cv_vec) >= semantic_threshold:
-                    semantic_found = True
-                    break
-
-            if semantic_found:
-                continue
-
-        except Exception as e:
-            print("Skill semantic match error:", e)
-
-        return False
-
-    return True
+    return all(req in cv_skills_normalized for req in required_skills_normalized)
 
 
 def skill_match(cv_skills, required_skills):
     """
-    Primary: OpenAI similar-skill matching.
-    Fallback: synonym map / fuzzy / embeddings only if OpenAI fails.
+    Primary: OpenAI technology-identity matching (handles unknown aliases).
+    Fallback: small known-alias map + exact match only if OpenAI fails.
     """
     required_skills = clean_list(required_skills)
     cv_skills = clean_list(cv_skills)
@@ -260,10 +210,16 @@ def skill_match(cv_skills, required_skills):
     if not cv_skills:
         return False
 
-    # Fast path: exact string coverage (no synonym map).
+    # Fast path: exact string coverage.
     required_set = set(required_skills)
     cv_set = set(cv_skills)
     if required_set.issubset(cv_set):
+        return True
+
+    # Fast path: known-alias canonical coverage (safe local synonyms only).
+    cv_canonical = {normalize_skill(s) for s in cv_skills if s}
+    req_canonical = [normalize_skill(s) for s in required_skills if s]
+    if req_canonical and all(r in cv_canonical for r in req_canonical):
         return True
 
     ai_result = normalize_and_match_skills(cv_skills, required_skills)
@@ -279,7 +235,7 @@ def skill_match(cv_skills, required_skills):
         return bool(ai_result.get("match", False))
 
     print(
-        "OpenAI skill match failed; using synonym-map fallback:",
+        "OpenAI skill match failed; using strict alias fallback:",
         ai_result.get("reason") if isinstance(ai_result, dict) else ai_result,
     )
     return skill_match_fallback(cv_skills, required_skills)
@@ -355,13 +311,7 @@ def evaluate_candidate(cv, required_skills, required_quals, exp_type, exp_value)
     cv_skills = clean_list(cv.get("skills"))
     cv_quals = cv.get("qualifications", [])
 
-    if cv.get("experience_months") is not None:
-        try:
-            cv_months = int(cv.get("experience_months") or 0)
-        except Exception:
-            cv_months = years_to_months(cv.get("experience_years"))
-    else:
-        cv_months = years_to_months(cv.get("experience_years"))
+    cv_months = resolve_experience_months(cv)
 
     required_skills = clean_list(required_skills)
     required_quals = required_quals or []
