@@ -11,7 +11,7 @@ from app.db_mongo import cv_collection
 from app.services.vision_ocr import vision_ocr
 from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
-from app.services.export_service import export_batch_shortlisted
+from app.services.export_service import export_batch_shortlisted, slug_position
 from app.services.utils_experience import (
     months_to_label,
     months_to_years_float,
@@ -31,6 +31,7 @@ def parse_experience_months(
     *,
     include_internships: bool = True,
     target_profession: str = "",
+    target_intern_label: str = "",
 ) -> int:
     """Resolve CV experience to months (job dates + stated years/months)."""
     if not isinstance(extracted, dict):
@@ -41,6 +42,7 @@ def parse_experience_months(
         internships=extracted.get("internships"),
         include_internships=include_internships,
         target_profession=target_profession,
+        target_intern_label=target_intern_label,
     )
 
 
@@ -94,7 +96,7 @@ def load_batch_requirements(db, batch_id: str):
 
     try:
         exp_row = db.execute(text("""
-            SELECT experience_type, experience_value, include_internships, profession
+            SELECT experience_type, experience_value, include_internships, profession, intern_label
             FROM upload_batches
             WHERE batch_id = :batch_id
         """), {
@@ -104,10 +106,11 @@ def load_batch_requirements(db, batch_id: str):
             exp_row[2] if exp_row and len(exp_row) > 2 else True
         )
         batch_profession = str(exp_row[3] or "").strip() if exp_row and len(exp_row) > 3 else ""
+        batch_intern_label = str(exp_row[4] or "").strip() if exp_row and len(exp_row) > 4 else ""
     except Exception:
         try:
             exp_row = db.execute(text("""
-                SELECT experience_type, experience_value, include_internships
+                SELECT experience_type, experience_value, include_internships, profession
                 FROM upload_batches
                 WHERE batch_id = :batch_id
             """), {
@@ -116,16 +119,31 @@ def load_batch_requirements(db, batch_id: str):
             include_internships = parse_include_internships(
                 exp_row[2] if exp_row and len(exp_row) > 2 else True
             )
+            batch_profession = str(exp_row[3] or "").strip() if exp_row and len(exp_row) > 3 else ""
+            batch_intern_label = ""
         except Exception:
-            exp_row = db.execute(text("""
-                SELECT experience_type, experience_value
-                FROM upload_batches
-                WHERE batch_id = :batch_id
-            """), {
-                "batch_id": batch_id
-            }).fetchone()
-            include_internships = True
-        batch_profession = ""
+            try:
+                exp_row = db.execute(text("""
+                    SELECT experience_type, experience_value, include_internships
+                    FROM upload_batches
+                    WHERE batch_id = :batch_id
+                """), {
+                    "batch_id": batch_id
+                }).fetchone()
+                include_internships = parse_include_internships(
+                    exp_row[2] if exp_row and len(exp_row) > 2 else True
+                )
+            except Exception:
+                exp_row = db.execute(text("""
+                    SELECT experience_type, experience_value
+                    FROM upload_batches
+                    WHERE batch_id = :batch_id
+                """), {
+                    "batch_id": batch_id
+                }).fetchone()
+                include_internships = True
+            batch_profession = ""
+            batch_intern_label = ""
 
     skills = [r[0] for r in skills_rows] if skills_rows else []
     qualifications = [r[0] for r in quals_rows] if quals_rows else []
@@ -137,6 +155,7 @@ def load_batch_requirements(db, batch_id: str):
         "experience_value": exp_row[1] if exp_row else 0,
         "include_internships": include_internships,
         "profession": batch_profession,
+        "intern_label": batch_intern_label,
     }
 
 
@@ -240,6 +259,28 @@ async def handle_batch_completion(db, batch_id):
         if export_result:
             excel_path = export_result["file_path"]
             excel_generated_at = export_result.get("generated_at")
+            excel_name = export_result.get("file_name") or os.path.basename(excel_path)
+            print(f"Excel file name: {excel_name}")
+            if batch_profession:
+                slug = slug_position(batch_profession)
+                if slug and slug.lower() not in excel_name.lower():
+                    print(
+                        f"ERROR: Excel missing position slug '{slug}' in '{excel_name}' "
+                        f"— regenerating once"
+                    )
+                    export_result = export_batch_shortlisted(
+                        batch_id,
+                        total_cvs=total_count,
+                        db=db,
+                        position=batch_profession,
+                    )
+                    if export_result:
+                        excel_path = export_result["file_path"]
+                        excel_generated_at = export_result.get("generated_at")
+                        excel_name = export_result.get("file_name") or os.path.basename(
+                            excel_path
+                        )
+                        print(f"Excel regenerated file name: {excel_name}")
 
             if existing:
                 db.execute(text("""
@@ -384,18 +425,21 @@ async def cv_worker_loop():
             required_exp = req["experience_value"]
             include_internships = req.get("include_internships", True)
             batch_profession = (req.get("profession") or "").strip()
+            batch_intern_label = (req.get("intern_label") or "").strip()
 
             raw_text = read_file(file_url)
 
             print("Raw text length:", len(raw_text))
             print("Include internships:", include_internships)
             print("Batch profession:", batch_profession or "(none)")
+            print("Batch intern label:", batch_intern_label or "(auto)")
 
             if len(raw_text.strip()) < 300:
                 extracted = vision_ocr(
                     file_url,
                     include_internships=include_internships,
                     target_profession=batch_profession,
+                    target_intern_label=batch_intern_label,
                 )
                 method = "vision_ocr"
             else:
@@ -403,6 +447,7 @@ async def cv_worker_loop():
                     raw_text,
                     include_internships=include_internships,
                     target_profession=batch_profession,
+                    target_intern_label=batch_intern_label,
                 )
                 method = "text_ai"
 
@@ -410,6 +455,7 @@ async def cv_worker_loop():
                 extracted,
                 include_internships=include_internships,
                 target_profession=batch_profession,
+                target_intern_label=batch_intern_label,
             )
             cv_skills = extracted.get("skills", []) or []
             cv_quals = extracted.get("qualifications", []) or []
@@ -425,11 +471,15 @@ async def cv_worker_loop():
                     "qualifications": cv_quals,
                     "experience_months": cv_exp_months,
                     "experience_years": months_to_years_float(cv_exp_months),
+                    "internships": extracted.get("internships", []),
                 },
                 required_skills=required_skills,
                 required_quals=required_quals,
                 exp_type=exp_type,
-                exp_value=required_exp
+                exp_value=required_exp,
+                include_internships=include_internships,
+                target_profession=batch_profession,
+                target_intern_label=batch_intern_label,
             )
 
             status = "Shortlisted" if result["match"] else "Rejected"
@@ -457,6 +507,7 @@ async def cv_worker_loop():
                 "experience_label": months_to_label(cv_exp_months),
                 "profession": extracted.get("profession"),
                 "batch_profession": batch_profession,
+                "batch_intern_label": batch_intern_label,
                 "internships": extracted.get("internships", []),
                 "include_internships": include_internships,
                 "file_name": file_name,

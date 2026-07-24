@@ -108,6 +108,7 @@ def resolve_experience_months(
     internships=None,
     include_internships: bool = True,
     target_profession: str = "",
+    target_intern_label: str = "",
 ) -> int:
     """
     Canonical total experience in months.
@@ -116,8 +117,9 @@ def resolve_experience_months(
     1) months recomputed from job/internship date ranges
     2) stated experience_months / experience_years from extraction
 
-    This avoids undercounting when dates fail to parse but the model
-    still reported years (e.g. experience_years=5, experience_months=0).
+    When internship include/exclude or an intern-role filter is active,
+    prefer date-derived filtered months so the AI's unfiltered stated
+    total cannot override the edited intern role.
     """
     data = data if isinstance(data, dict) else {}
     jobs = internships if internships is not None else data.get("internships")
@@ -128,10 +130,25 @@ def resolve_experience_months(
             jobs,
             include_internships=include_internships,
             target_profession=target_profession,
+            target_intern_label=target_intern_label,
         )
 
     stated = stated_experience_months(data)
-    return max(int(calculated or 0), int(stated or 0))
+    calculated = int(calculated or 0)
+    stated = int(stated or 0)
+
+    track = resolve_intern_label(target_profession, target_intern_label)
+    internship_filter_active = (not include_internships) or (
+        bool(track) and track.lower() != "intern"
+    )
+
+    # Filtered path: always trust date-derived months for the selected intern
+    # role. Never fall back to AI stated totals — those often include excluded
+    # internships (e.g. SE Intern when filter is "AI Engineer Intern").
+    if internship_filter_active and jobs is not None:
+        return calculated
+
+    return max(calculated, stated)
 
 
 def months_to_label(total_months) -> str:
@@ -242,64 +259,199 @@ def is_internship_entry(entry) -> bool:
     return "intern" in role and "internal" not in role
 
 
+def _normalize_profession_name(profession: str) -> str:
+    name = str(profession or "").strip().lower()
+    name = name.replace("-", " ").replace("_", " ")
+    name = re.sub(r"\s+", " ", name).strip()
+    # Restore original casing via title-ish rebuild from cleaned tokens later;
+    # callers that need display casing should use the cleaned display helper.
+    return name
+
+
+def _display_profession_name(profession: str) -> str:
+    """Collapse whitespace/hyphens while keeping readable Title Case words."""
+    cleaned = _normalize_profession_name(profession)
+    if not cleaned:
+        return ""
+    # Prefer original spacing if already simple; otherwise title-case cleaned tokens.
+    original = " ".join(str(profession or "").strip().replace("-", " ").replace("_", " ").split())
+    if original.lower() == cleaned:
+        return original
+    return " ".join(w.capitalize() if w.lower() not in {"and", "of", "for"} else w.lower() for w in cleaned.split())
+
+
+_LEVEL_PREFIXES = (
+    "mid-level",
+    "mid level",
+    "entry-level",
+    "entry level",
+    "principal",
+    "associate",
+    "senior",
+    "junior",
+    "staff",
+    "lead",
+    "snr",
+    "sr.",
+    "jr.",
+    "sr",
+    "jr",
+)
+
+_LEAD_MANAGER_TITLES = {
+    "team lead",
+    "tech lead",
+    "technical lead",
+    "engineering lead",
+    "engineering manager",
+    "software manager",
+    "development manager",
+    "dev manager",
+    "project lead",
+    "manager",
+}
+
+_DEFAULT_INTERN_BASE = "Software Engineer"
+
+
+def _is_lead_or_manager_title(lower: str) -> bool:
+    if lower in _LEAD_MANAGER_TITLES:
+        return True
+    if lower.endswith(
+        (" team lead", " tech lead", " technical lead", " engineering lead")
+    ):
+        return True
+    if lower.endswith(" manager") and "engineer" not in lower and "developer" not in lower:
+        return True
+    return False
+
+
+def intern_base_profession(profession: str) -> str:
+    """
+    Hiring position → IC base used for intern labels/matching.
+    Senior Software Engineer → Software Engineer
+    Team Lead → Software Engineer
+    Software Engineer Intern → Software Engineer
+    """
+    lower = _normalize_profession_name(profession)
+    if not lower:
+        return ""
+
+    for suffix in (" internship", " intern", " trainee"):
+        if lower.endswith(suffix):
+            lower = lower[: -len(suffix)].strip()
+            break
+
+    if not lower or lower in {"intern", "internship", "trainee"}:
+        return _DEFAULT_INTERN_BASE
+
+    if _is_lead_or_manager_title(lower):
+        return _DEFAULT_INTERN_BASE
+
+    # Strip level prefixes from the normalized form, then rebuild display.
+    base_lower = lower
+    while True:
+        stripped = False
+        for prefix in _LEVEL_PREFIXES:
+            token = f"{prefix} "
+            if base_lower.startswith(token):
+                base_lower = base_lower[len(token) :].strip()
+                stripped = True
+                break
+        if not stripped:
+            break
+
+    if not base_lower or _is_lead_or_manager_title(base_lower):
+        return _DEFAULT_INTERN_BASE
+
+    # Keep familiar casing for common SE base; otherwise title-case tokens.
+    if base_lower == "software engineer":
+        return _DEFAULT_INTERN_BASE
+    return _display_profession_name(base_lower) or _DEFAULT_INTERN_BASE
+
+
 def profession_intern_label(profession: str) -> str:
     """
     Hiring position → related intern title.
     Software Engineer → Software Engineer Intern
-    Software Engineer Intern → Software Engineer Intern (same, no double Intern)
+    Senior Software Engineer → Software Engineer Intern
+    Team Lead → Software Engineer Intern
+    Software Engineer Intern → Software Engineer Intern (no double Intern)
     """
-    name = " ".join(str(profession or "").strip().split())
-    if not name:
+    lower = _normalize_profession_name(profession)
+    if not lower:
         return "Intern"
-    lower = name.lower()
-    if (
-        lower.endswith(" intern")
-        or lower.endswith(" internship")
-        or lower in {"intern", "internship", "trainee"}
-    ):
-        return name
-    return f"{name} Intern"
+
+    if lower in {"intern", "internship", "trainee"}:
+        return "Intern"
+
+    base = intern_base_profession(profession)
+    return f"{base} Intern" if base else "Intern"
+
+
+def resolve_intern_label(profession: str = "", intern_label: str = "") -> str:
+    """Prefer a user-edited intern label; otherwise derive from position."""
+    custom = " ".join(str(intern_label or "").strip().split())
+    if custom:
+        return custom
+    return profession_intern_label(profession)
 
 
 def base_profession_for_intern_match(profession: str) -> str:
-    """Strip trailing Intern/Internship so SE Intern matches SE Intern roles."""
-    name = " ".join(str(profession or "").strip().split())
-    lower = name.lower()
-    for suffix in (" internship", " intern", " trainee"):
-        if lower.endswith(suffix):
-            return name[: -len(suffix)].strip()
-    return name
+    """IC base role for matching internships to the hiring position."""
+    return intern_base_profession(profession) or _display_profession_name(profession)
 
 
-def internship_matches_profession(entry, profession: str) -> bool:
+def internship_matches_profession(
+    entry,
+    profession: str,
+    intern_label: str = "",
+) -> bool:
     """
-    Whether an internship relates to the target hiring position.
+    Whether an internship relates to the target hiring position / intern label.
     Software Engineer → Software Engineer Intern
-    Software Engineer Intern → same intern experience (not Intern Intern)
+    Custom "QA Intern" → match QA internships
     """
     if not isinstance(entry, dict):
         return False
     if not is_internship_entry(entry):
         return False
 
-    profession = " ".join(str(profession or "").strip().split())
-    if not profession:
+    label = resolve_intern_label(profession, intern_label)
+    if not label or label.lower() == "intern":
+        # No specific track — count all internships when include is on.
         return True
 
     role = _normalize_type(entry.get("role") or entry.get("title"))
     company = _normalize_type(entry.get("company") or entry.get("organization"))
     blob = f"{role} {company}"
-    prof = profession.lower()
-    base = base_profession_for_intern_match(profession).lower()
+    base = intern_base_profession(label).lower()
+    label_l = label.lower()
 
-    if prof in blob or (base and base in blob):
+    # Match against IC base / intern title — not the senior/lead hiring title.
+    if (base and base in blob) or (label_l and label_l in blob):
         return True
 
     # Prefer base tokens (without trailing "intern") so "Software Engineer Intern"
     # matches roles like "Software Engineer Intern" / "SE Intern".
-    match_text = base or prof
+    match_text = base or label_l
     tokens = [t for t in re.split(r"[^a-z0-9]+", match_text) if len(t) >= 2]
-    skip = {"the", "and", "of", "for", "a", "an", "intern", "internship", "trainee"}
+    skip = {
+        "the",
+        "and",
+        "of",
+        "for",
+        "a",
+        "an",
+        "intern",
+        "internship",
+        "trainee",
+        "senior",
+        "junior",
+        "lead",
+        "team",
+        "manager",
+    }
     meaningful = [t for t in tokens if t not in skip]
 
     if meaningful and all(t in blob for t in meaningful):
@@ -383,22 +535,27 @@ def calculate_experience_months(
     internships,
     include_internships: bool = True,
     target_profession: str = "",
+    target_intern_label: str = "",
 ) -> int:
     """
     Counts jobs always.
     Counts internships only when include_internships is True.
-    When target_profession is set, only profession-related internships count
-    (e.g. Software Engineer → Software Engineer Intern).
+    When a profession/intern label is set, only related internships count.
     """
     total_months = 0
     profession = " ".join(str(target_profession or "").strip().split())
+    intern_label = " ".join(str(target_intern_label or "").strip().split())
+    track = resolve_intern_label(profession, intern_label)
 
     for job in filter_jobs_and_internships(internships):
         if is_internship_entry(job):
             if not include_internships:
                 continue
-            if profession and not internship_matches_profession(job, profession):
-                continue
+            if track and track.lower() != "intern":
+                if not internship_matches_profession(
+                    job, profession, intern_label=intern_label
+                ):
+                    continue
 
         start = parse_date(job.get("start_date"))
         end = parse_date(job.get("end_date"))

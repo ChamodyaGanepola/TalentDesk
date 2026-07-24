@@ -307,11 +307,32 @@ def qualification_vector_match(cv_quals, req_quals):
 # =========================
 # MAIN EVALUATION
 # =========================
-def evaluate_candidate(cv, required_skills, required_quals, exp_type, exp_value):
+def evaluate_candidate(
+    cv,
+    required_skills,
+    required_quals,
+    exp_type,
+    exp_value,
+    include_internships: bool = True,
+    target_profession: str = "",
+    target_intern_label: str = "",
+):
     cv_skills = clean_list(cv.get("skills"))
     cv_quals = cv.get("qualifications", [])
 
-    cv_months = resolve_experience_months(cv)
+    # Prefer worker-computed months when internships are not attached.
+    if cv.get("internships") is None and cv.get("experience_months") is not None:
+        try:
+            cv_months = int(round(float(cv.get("experience_months") or 0)))
+        except Exception:
+            cv_months = 0
+    else:
+        cv_months = resolve_experience_months(
+            cv,
+            include_internships=include_internships,
+            target_profession=target_profession,
+            target_intern_label=target_intern_label,
+        )
 
     required_skills = clean_list(required_skills)
     required_quals = required_quals or []

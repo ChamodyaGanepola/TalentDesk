@@ -132,6 +132,20 @@ def ensure_include_internships_column(db: Session):
         except Exception:
             pass
 
+    try:
+        db.execute(text("""
+            ALTER TABLE upload_batches
+            ADD COLUMN intern_label VARCHAR(255) NULL
+        """))
+        db.commit()
+        print("Added upload_batches.intern_label column")
+    except Exception as e:
+        print("intern_label column ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
     _include_internships_ready = True
 
 
@@ -361,14 +375,25 @@ def get_qualifications(db: Session = Depends(get_db)):
 # =========================
 @router.post("/professions/add")
 def add_profession(payload: dict = Body(...), db: Session = Depends(get_db)):
-    ensure_profession_schema(db)
-    name = get_or_create_profession(db, payload.get("name"))
+    try:
+        ensure_profession_schema(db)
+        name = get_or_create_profession(db, payload.get("name"))
 
-    if not name:
-        return {"success": False, "message": "Name required"}
+        if not name:
+            return {"success": False, "message": "Name required"}
 
-    db.commit()
-    return {"success": True, "name": name}
+        db.commit()
+        return {"success": True, "name": name}
+    except Exception as e:
+        print("add_profession error:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {
+            "success": False,
+            "message": "Could not save profession. Please try again.",
+        }
 
 
 @router.get("/professions")
@@ -402,6 +427,7 @@ async def upload_cvs(
     experience_months: int | None = Form(None),
     include_internships: str = Form("yes"),
     profession: str = Form(""),
+    intern_label: str = Form(""),
     db: Session = Depends(get_db)
 ):
     uploaded_files = []
@@ -411,6 +437,7 @@ async def upload_cvs(
     parsed_qualifications = safe_json(qualifications)
     include_internships_flag = parse_include_internships(include_internships)
     batch_profession = normalize_profession(profession)
+    batch_intern_label = " ".join(str(intern_label or "").strip().split())
 
     valid_experience_types = {"minimum", "more_than", "exact"}
 
@@ -451,13 +478,14 @@ async def upload_cvs(
         # =========================
         db.execute(text("""
             INSERT INTO upload_batches
-            (batch_id, experience_type, experience_value, include_internships, profession, created_at)
+            (batch_id, experience_type, experience_value, include_internships, profession, intern_label, created_at)
             VALUES (
                 :batch_id,
                 :experience_type,
                 :experience_value,
                 :include_internships,
                 :profession,
+                :intern_label,
                 :created_at
             )
         """), {
@@ -466,6 +494,7 @@ async def upload_cvs(
             "experience_value": stored_months,
             "include_internships": 1 if include_internships_flag else 0,
             "profession": batch_profession or None,
+            "intern_label": batch_intern_label or None,
             "created_at": datetime.now(timezone.utc).replace(tzinfo=None)
         })
 
@@ -937,6 +966,7 @@ def get_batches(db: Session = Depends(get_db)):
             ub.experience_value,
             ub.include_internships,
             ub.profession,
+            ub.intern_label,
             COALESCE(ub.created_at, MIN(u.created_at)) AS created_at,
             COUNT(u.id) AS total,
             SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
@@ -946,7 +976,7 @@ def get_batches(db: Session = Depends(get_db)):
             SUM(CASE WHEN u.status='Failed' THEN 1 ELSE 0 END) AS failed
         FROM upload_batches ub
         LEFT JOIN uploads u ON u.batch_id = ub.batch_id
-        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.created_at
+        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.intern_label, ub.created_at
         ORDER BY COALESCE(ub.created_at, MIN(u.created_at)) DESC
     """)).mappings().all()
 
@@ -956,6 +986,7 @@ def get_batches(db: Session = Depends(get_db)):
             "experience_type": r["experience_type"],
             "include_internships": parse_include_internships(r["include_internships"]),
             "profession": r["profession"] or "",
+            "intern_label": r["intern_label"] or "",
             **serialize_batch_experience(r["experience_value"]),
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "total": r["total"] or 0,
@@ -984,6 +1015,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
             ub.experience_value,
             ub.include_internships,
             ub.profession,
+            ub.intern_label,
             COALESCE(ub.created_at, MIN(u.created_at)) AS created_at,
             COUNT(u.id) AS total,
             SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
@@ -994,7 +1026,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
         FROM upload_batches ub
         LEFT JOIN uploads u ON u.batch_id = ub.batch_id
         WHERE ub.batch_id = :batch_id
-        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.created_at
+        GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.intern_label, ub.created_at
     """), {
         "batch_id": batch_id
     }).mappings().first()
@@ -1066,6 +1098,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
                 batch.get("include_internships")
             ),
             "profession": batch.get("profession") or "",
+            "intern_label": batch.get("intern_label") or "",
             **serialize_batch_experience(batch["experience_value"]),
             "created_at": batch["created_at"].isoformat() if batch["created_at"] else None,
             "total": batch["total"] or 0,

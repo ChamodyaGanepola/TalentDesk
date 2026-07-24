@@ -12,6 +12,7 @@ import {
   formatExperienceFromMonths,
   formatSLDateTime,
 } from "@/app/lib/datetime";
+import { professionInternLabel } from "@/app/lib/profession";
 import { ArrowLeft, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
@@ -34,6 +35,7 @@ type Batch = {
   experience_label?: string | null;
   include_internships?: boolean;
   profession?: string;
+  intern_label?: string;
   created_at: string | null;
   total: number;
   pending: number;
@@ -349,28 +351,26 @@ function BatchDetailsContent() {
                   </p>
                 </div>
 
-                <div>
-                  <p className="text-sm text-slate-500 mb-2">
-                    {(() => {
-                      const name = (batch.profession || "").trim();
-                      if (!name) return "Internships";
-                      const lower = name.toLowerCase();
-                      if (
-                        lower.endsWith(" intern") ||
-                        lower.endsWith(" internship") ||
-                        lower === "intern" ||
-                        lower === "internship"
-                      ) {
-                        return name;
-                      }
-                      return `${name} Intern`;
-                    })()}
-                  </p>
+                <div className="min-w-0">
+                  <p className="text-sm text-slate-500 mb-2">Internships</p>
                   <p className="font-medium">
                     {batch.include_internships === false
                       ? "Excluded from experience"
                       : "Included in experience"}
                   </p>
+                  {(batch.intern_label?.trim() ||
+                    batch.profession?.trim()) && (
+                    <p
+                      className="text-xs text-slate-500 mt-1 truncate"
+                      title={
+                        batch.intern_label?.trim() ||
+                        professionInternLabel(batch.profession || "")
+                      }
+                    >
+                      {batch.intern_label?.trim() ||
+                        professionInternLabel(batch.profession || "")}
+                    </p>
+                  )}
                 </div>
 
                 <div>

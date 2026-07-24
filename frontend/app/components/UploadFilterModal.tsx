@@ -17,6 +17,7 @@ import { FilterSectionSkeleton } from "@/app/components/Skeletons";
 import ConfirmDialog from "@/app/components/ui/ConfirmDialog";
 import { useToast } from "@/app/components/ui/Toast";
 import { yearsMonthsToTotalMonths } from "@/app/lib/datetime";
+import { professionInternLabel } from "@/app/lib/profession";
 import {
   addProfessionToCache,
   addQualificationToCache,
@@ -24,9 +25,10 @@ import {
   fetchMasters,
   getCachedMasters,
 } from "@/app/lib/mastersCache";
-import { getAuthHeaders } from "@/app/lib/auth";
+import { authFetch, getAuthHeaders } from "@/app/lib/auth";
+import { getApiBase } from "@/app/lib/api";
 
-const API = process.env.NEXT_PUBLIC_API_URL;
+const API = getApiBase();
 
 type Props = {
   files: FileList | null;
@@ -201,6 +203,8 @@ export default function UploadFilterModal({
 
   const [experienceType, setExperienceType] = useState("minimum");
   const [includeInternships, setIncludeInternships] = useState("yes");
+  const [internLabel, setInternLabel] = useState("Intern");
+  const [internLabelTouched, setInternLabelTouched] = useState(false);
   const [experienceYears, setExperienceYears] = useState(1);
   const [experienceMonths, setExperienceMonths] = useState(0);
 
@@ -224,25 +228,19 @@ export default function UploadFilterModal({
       ? "More than"
       : "Exactly";
 
-  const internRoleLabel = (() => {
-    const name = selectedProfession.trim();
-    if (!name) return "Intern";
-    const lower = name.toLowerCase();
-    if (
-      lower.endsWith(" intern") ||
-      lower.endsWith(" internship") ||
-      lower === "intern" ||
-      lower === "internship"
-    ) {
-      return name;
-    }
-    return `${name} Intern`;
-  })();
+  const suggestedInternLabel = professionInternLabel(selectedProfession);
+  const internRoleLabel = internLabel.trim() || suggestedInternLabel;
+
+  useEffect(() => {
+    if (internLabelTouched) return;
+    setInternLabel(suggestedInternLabel);
+  }, [suggestedInternLabel, internLabelTouched]);
 
   const hasFilterChanges =
     selectedSkills.length > 0 ||
     selectedQualifications.length > 0 ||
     Boolean(selectedProfession) ||
+    internLabelTouched ||
     experienceType !== "minimum" ||
     includeInternships !== "yes" ||
     experienceYears !== 1 ||
@@ -319,6 +317,7 @@ export default function UploadFilterModal({
 
   const selectProfession = (name: string) => {
     setSelectedProfession((prev) => (prev === name ? "" : name));
+    setInternLabelTouched(false);
     if (name && selectedProfession !== name) {
       scrollToExperience();
     }
@@ -337,11 +336,22 @@ export default function UploadFilterModal({
     if (!name) return;
 
     try {
-      await fetch(`${API}/skills/add`, {
+      const res = await authFetch("/skills/add", {
         method: "POST",
-        headers: getAuthHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
+
+      if (!res || !res.ok) {
+        const data = res ? await res.json().catch(() => ({})) : {};
+        const msg =
+          res?.status === 401
+            ? "Session expired. Please sign in again."
+            : data?.message || data?.detail || "Failed to add skill.";
+        setMessage(msg);
+        showToast(msg, "error");
+        return;
+      }
 
       addSkillToCache(name);
       setSkills((prev) => (prev.includes(name) ? prev : [...prev, name].sort()));
@@ -361,11 +371,22 @@ export default function UploadFilterModal({
     if (!name) return;
 
     try {
-      await fetch(`${API}/qualifications/add`, {
+      const res = await authFetch("/qualifications/add", {
         method: "POST",
-        headers: getAuthHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
+
+      if (!res || !res.ok) {
+        const data = res ? await res.json().catch(() => ({})) : {};
+        const msg =
+          res?.status === 401
+            ? "Session expired. Please sign in again."
+            : data?.message || data?.detail || "Failed to add qualification.";
+        setMessage(msg);
+        showToast(msg, "error");
+        return;
+      }
 
       addQualificationToCache(name);
       setQualifications((prev) =>
@@ -389,15 +410,26 @@ export default function UploadFilterModal({
     if (!name) return;
 
     try {
-      const res = await fetch(`${API}/professions/add`, {
+      const res = await authFetch("/professions/add", {
         method: "POST",
-        headers: getAuthHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
+
+      if (!res) {
+        const msg = "Cannot reach the server.";
+        setMessage(msg);
+        showToast(msg, "error");
+        return;
+      }
+
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok || data?.success === false) {
-        const msg = data?.message || "Failed to add profession.";
+        const msg =
+          res.status === 401
+            ? "Session expired. Please sign in again."
+            : data?.message || data?.detail || "Failed to add profession.";
         setMessage(msg);
         showToast(msg, "error");
         return;
@@ -415,6 +447,7 @@ export default function UploadFilterModal({
           : [...prev, savedName].sort((a, b) => a.localeCompare(b));
       });
       setSelectedProfession(savedName);
+      setInternLabelTouched(false);
       setProfessionSearch("");
       showToast(`Profession "${savedName}" added.`, "success");
       scrollToExperience();
@@ -447,6 +480,7 @@ export default function UploadFilterModal({
       formData.append("experience_type", experienceType);
       formData.append("include_internships", includeInternships);
       formData.append("profession", selectedProfession);
+      formData.append("intern_label", internRoleLabel);
       formData.append("experience_months", String(totalMonths));
       formData.append("experience_value", String(totalMonths));
 
@@ -630,9 +664,9 @@ export default function UploadFilterModal({
               title="Work experience"
               subtitle={`${experienceLabel} ${experienceYears}y ${experienceMonths}m (${totalMonths} months) · ${internRoleLabel} ${includeInternships === "yes" ? "included" : "excluded"}`}
             >
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <label className="block">
-                <span className="text-xs font-medium text-slate-500 mb-1 block">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+              <label className="block min-w-0">
+                <span className="text-xs font-medium text-slate-500 mb-1 flex h-8 items-end leading-snug">
                   Requirement
                 </span>
                 <select
@@ -646,9 +680,32 @@ export default function UploadFilterModal({
                 </select>
               </label>
 
-              <label className="block">
-                <span className="text-xs font-medium text-slate-500 mb-1 block">
-                  {internRoleLabel}
+              <label className="block min-w-0">
+                <span className="text-xs font-medium text-slate-500 mb-1 flex h-8 items-end leading-snug">
+                  Intern role
+                </span>
+                <input
+                  type="text"
+                  value={internLabel}
+                  onChange={(e) => {
+                    setInternLabelTouched(true);
+                    setInternLabel(e.target.value);
+                  }}
+                  onBlur={() => {
+                    if (!internLabel.trim()) {
+                      setInternLabelTouched(false);
+                      setInternLabel(suggestedInternLabel);
+                    }
+                  }}
+                  placeholder={suggestedInternLabel}
+                  title="Edit if the suggested intern role is not what you want"
+                  className="w-full bg-white p-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-400"
+                />
+              </label>
+
+              <label className="block min-w-0">
+                <span className="text-xs font-medium text-slate-500 mb-1 flex h-8 items-end leading-snug">
+                  Include
                 </span>
                 <select
                   value={includeInternships}
@@ -660,8 +717,8 @@ export default function UploadFilterModal({
                 </select>
               </label>
 
-              <label className="block">
-                <span className="text-xs font-medium text-slate-500 mb-1 block">
+              <label className="block min-w-0">
+                <span className="text-xs font-medium text-slate-500 mb-1 flex h-8 items-end leading-snug">
                   Years
                 </span>
                 <DownSelect
@@ -675,8 +732,8 @@ export default function UploadFilterModal({
                 />
               </label>
 
-              <label className="block">
-                <span className="text-xs font-medium text-slate-500 mb-1 block">
+              <label className="block min-w-0">
+                <span className="text-xs font-medium text-slate-500 mb-1 flex h-8 items-end leading-snug">
                   Months
                 </span>
                 <DownSelect

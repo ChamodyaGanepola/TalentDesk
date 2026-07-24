@@ -77,6 +77,36 @@ export function getAuthHeaders(extra: Record<string, string> = {}): Record<strin
   return headers;
 }
 
+/**
+ * Authenticated API fetch with one refresh+retry on 401.
+ */
+export async function authFetch(
+  path: string,
+  init: RequestInit = {}
+): Promise<Response | null> {
+  const extraHeaders =
+    init.headers && typeof init.headers === "object" && !(init.headers instanceof Headers)
+      ? (init.headers as Record<string, string>)
+      : {};
+
+  const doFetch = () =>
+    apiFetch(path, {
+      ...init,
+      headers: getAuthHeaders(extraHeaders),
+    });
+
+  let res = await doFetch();
+  if (!res) return null;
+
+  if (res.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed) return res;
+    res = await doFetch();
+  }
+
+  return res;
+}
+
 let refreshPromise: Promise<boolean> | null = null;
 
 export async function refreshAccessToken(): Promise<boolean> {

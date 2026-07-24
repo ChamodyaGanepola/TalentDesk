@@ -5,8 +5,8 @@ from openai import OpenAI
 from app.services.utils_experience import (
     filter_jobs_and_internships,
     parse_include_internships,
-    profession_intern_label,
     resolve_experience_months,
+    resolve_intern_label,
 )
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -55,7 +55,12 @@ def default_cv_result():
     }
 
 
-def extract_cv_text(text: str, include_internships: bool = True, target_profession: str = ""):
+def extract_cv_text(
+    text: str,
+    include_internships: bool = True,
+    target_profession: str = "",
+    target_intern_label: str = "",
+):
     """
     Extract CV information from text-based PDF content.
     Experience is finally calculated in Python from jobs
@@ -68,7 +73,7 @@ def extract_cv_text(text: str, include_internships: bool = True, target_professi
 
     include_internships = parse_include_internships(include_internships)
     target = " ".join(str(target_profession or "").strip().split())
-    intern_label = profession_intern_label(target)
+    intern_label = resolve_intern_label(target, target_intern_label)
     internship_policy = (
         f'INCLUDE "{intern_label}" experience in months. Count internship '
         f"entries whose role relates to \"{target or 'the target position'}\" "
@@ -221,6 +226,7 @@ OUTPUT:
             internships=internships,
             include_internships=include_internships,
             target_profession=target,
+            target_intern_label=target_intern_label,
         )
 
         return {
