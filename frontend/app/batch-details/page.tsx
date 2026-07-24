@@ -57,6 +57,7 @@ type UploadItem = {
   file_url: string;
   stored_file: string;
   status: UploadStatus;
+  failure_reason?: string;
   created_at: string | null;
 };
 
@@ -475,7 +476,7 @@ function BatchDetailsContent() {
                       key={file.id}
                       className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border border-slate-200 rounded-2xl px-5 py-4 hover:border-cyan-200 transition"
                     >
-                      <div>
+                      <div className="min-w-0">
                         <a
                           href={getUploadUrl(file.stored_file)}
                           target="_blank"
@@ -488,10 +489,21 @@ function BatchDetailsContent() {
                         <p className="text-sm text-slate-500">
                           {formatSLDateTime(file.created_at)}
                         </p>
+
+                        {(file.status === "Rejected" ||
+                          file.status === "Failed") && (
+                            <p className="text-sm text-red-600 mt-1">
+                              Reason:{" "}
+                              {file.failure_reason?.trim() ||
+                                (file.status === "Failed"
+                                  ? "Processing failed"
+                                  : "Did not meet screening criteria")}
+                            </p>
+                          )}
                       </div>
 
                       <span
-                        className={`px-4 py-1 rounded-full text-sm w-fit ${getStatusClass(
+                        className={`px-4 py-1 rounded-full text-sm w-fit shrink-0 ${getStatusClass(
                           file.status
                         )}`}
                       >

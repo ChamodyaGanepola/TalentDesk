@@ -34,6 +34,7 @@ type UploadItem = {
   file_url: string;
   stored_file: string;
   status: UploadStatus;
+  failure_reason?: string;
   created_at: string | null;
 };
 
@@ -1062,9 +1063,9 @@ export default function DashboardPage() {
             {uploads.map((file) => (
               <div
                 key={file.id}
-                className="flex items-center justify-between border rounded-2xl px-5 py-4"
+                className="flex items-center justify-between gap-4 border rounded-2xl px-5 py-4"
               >
-                <div>
+                <div className="min-w-0">
                   <a
                     href={`${API}/uploads/${file.stored_file}`}
                     target="_blank"
@@ -1077,10 +1078,20 @@ export default function DashboardPage() {
                   <p className="text-sm text-slate-500">
                     {formatSLDateTime(file.created_at)}
                   </p>
+
+                  {(file.status === "Rejected" || file.status === "Failed") && (
+                      <p className="text-sm text-red-600 mt-1">
+                        Reason:{" "}
+                        {file.failure_reason?.trim() ||
+                          (file.status === "Failed"
+                            ? "Processing failed"
+                            : "Did not meet screening criteria")}
+                      </p>
+                    )}
                 </div>
 
                 <span
-                  className={`px-4 py-1 rounded-full text-sm ${getStatusClass(
+                  className={`px-4 py-1 rounded-full text-sm shrink-0 ${getStatusClass(
                     file.status
                   )}`}
                 >
