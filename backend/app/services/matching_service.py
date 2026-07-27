@@ -307,6 +307,46 @@ def qualification_vector_match(cv_quals, req_quals):
 # =========================
 # MAIN EVALUATION
 # =========================
+def build_rejection_reason(
+    *,
+    skills_ok: bool,
+    qual_ok: bool,
+    exp_ok: bool,
+    cv_months: int = 0,
+    exp_type: str = "minimum",
+    exp_value: float | int = 0,
+) -> str:
+    """Human-readable reject reasons from match flags (no OpenAI call)."""
+    reasons: list[str] = []
+
+    if not skills_ok:
+        reasons.append("Required skills not matched")
+
+    if not qual_ok:
+        reasons.append("Required qualifications not matched")
+
+    if not exp_ok:
+        try:
+            required = int(round(float(exp_value or 0)))
+        except Exception:
+            required = 0
+        found = int(cv_months or 0)
+        label = (
+            "minimum"
+            if exp_type == "minimum"
+            else "more than"
+            if exp_type == "more_than"
+            else "exact"
+        )
+        reasons.append(
+            f"Experience below requirement ({found} months found, needs {label} {required} months)"
+            if exp_type != "exact"
+            else f"Experience does not match exact requirement ({found} months found, needs {required} months)"
+        )
+
+    return "; ".join(reasons) if reasons else "Did not meet screening criteria"
+
+
 def evaluate_candidate(
     cv,
     required_skills,
@@ -365,10 +405,25 @@ def evaluate_candidate(
     if exp_ok:
         score += 20
 
+    matched = score == 100
+    failure_reason = (
+        ""
+        if matched
+        else build_rejection_reason(
+            skills_ok=skills_ok,
+            qual_ok=qual_ok,
+            exp_ok=exp_ok,
+            cv_months=cv_months,
+            exp_type=exp_type,
+            exp_value=exp_value,
+        )
+    )
+
     return {
-        "match": score == 100,
+        "match": matched,
         "score": score,
         "skills_ok": skills_ok,
         "qual_ok": qual_ok,
-        "exp_ok": exp_ok
+        "exp_ok": exp_ok,
+        "failure_reason": failure_reason,
     }

@@ -70,6 +70,8 @@ def slug_position(position: str) -> str:
     text = " ".join(str(position or "").strip().split())
     if not text:
         return ""
+    # Keep readable separators for titles like UI/UX Engineer → UI-UX-Engineer
+    text = text.replace("/", "-").replace("\\", "-").replace("&", "-")
     text = re.sub(r"[^\w\s\-]+", "", text, flags=re.UNICODE)
     text = re.sub(r"[-\s]+", "-", text).strip("-_")
     return text[:60]

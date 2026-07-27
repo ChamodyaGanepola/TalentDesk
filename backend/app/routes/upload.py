@@ -149,6 +149,32 @@ def ensure_include_internships_column(db: Session):
     _include_internships_ready = True
 
 
+_failure_reason_ready = False
+
+
+def ensure_failure_reason_column(db: Session):
+    """Add uploads.failure_reason for rejected/failed CV explanations."""
+    global _failure_reason_ready
+    if _failure_reason_ready:
+        return
+
+    try:
+        db.execute(text("""
+            ALTER TABLE uploads
+            ADD COLUMN failure_reason VARCHAR(500) NULL
+        """))
+        db.commit()
+        print("Added uploads.failure_reason column")
+    except Exception as e:
+        print("failure_reason column ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    _failure_reason_ready = True
+
+
 def ensure_profession_schema(db: Session):
     """Professions master list + optional batch position name."""
     global _profession_schema_ready
@@ -648,6 +674,7 @@ def recent_uploads(
     Cursor is opaque; ordered by created_at DESC, id DESC.
     """
     _ensure_indexes(db)
+    ensure_failure_reason_column(db)
 
     page_size = clamp_page_size(per_page)
     fetch_limit = page_size + 1
@@ -682,7 +709,7 @@ def recent_uploads(
     where_sql = " AND ".join(where_parts)
 
     rows = db.execute(text(f"""
-        SELECT id, batch_id, file_name, file_url, status, created_at
+        SELECT id, batch_id, file_name, file_url, status, failure_reason, created_at
         FROM uploads
         WHERE {where_sql}
         ORDER BY created_at DESC, id DESC
@@ -699,6 +726,17 @@ def recent_uploads(
             "created_at": last["created_at"].isoformat() if last["created_at"] else None,
         })
 
+    def _reason_for_row(row) -> str:
+        reason = str(row.get("failure_reason") or "").strip()
+        status = str(row.get("status") or "")
+        if reason:
+            return reason
+        if status == "Rejected":
+            return "Did not meet screening criteria"
+        if status == "Failed":
+            return "Processing failed"
+        return ""
+
     return {
         "data": [
             {
@@ -708,6 +746,7 @@ def recent_uploads(
                 "file_url": r["file_url"],
                 "stored_file": os.path.basename(r["file_url"]),
                 "status": r["status"],
+                "failure_reason": _reason_for_row(r),
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             }
             for r in items
@@ -1007,6 +1046,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
     ensure_experience_stored_as_months(db)
     ensure_include_internships_column(db)
     ensure_profession_schema(db)
+    ensure_failure_reason_column(db)
 
     batch = db.execute(text("""
         SELECT
@@ -1064,6 +1104,7 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
             file_name,
             file_url,
             status,
+            failure_reason,
             created_at
         FROM uploads
         WHERE batch_id = :batch_id
@@ -1121,6 +1162,16 @@ def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
                 "file_url": u["file_url"],
                 "stored_file": os.path.basename(u["file_url"]),
                 "status": u["status"],
+                "failure_reason": (
+                    str(u.get("failure_reason") or "").strip()
+                    or (
+                        "Did not meet screening criteria"
+                        if str(u.get("status") or "") == "Rejected"
+                        else "Processing failed"
+                        if str(u.get("status") or "") == "Failed"
+                        else ""
+                    )
+                ),
                 "created_at": u["created_at"].isoformat() if u["created_at"] else None
             }
             for u in uploads

@@ -160,13 +160,24 @@ def load_batch_requirements(db, batch_id: str):
 
 
 def mark_failed(db, job_id, error_message=None):
-    db.execute(text("""
-        UPDATE uploads
-        SET status='Failed'
-        WHERE id=:id
-    """), {
-        "id": job_id
-    })
+    reason = " ".join(str(error_message or "Processing failed").strip().split())[:500]
+    try:
+        db.execute(text("""
+            UPDATE uploads
+            SET status='Failed', failure_reason=:failure_reason
+            WHERE id=:id
+        """), {
+            "id": job_id,
+            "failure_reason": reason or "Processing failed",
+        })
+    except Exception:
+        db.execute(text("""
+            UPDATE uploads
+            SET status='Failed'
+            WHERE id=:id
+        """), {
+            "id": job_id
+        })
     db.commit()
 
     if error_message:
@@ -483,6 +494,11 @@ async def cv_worker_loop():
             )
 
             status = "Shortlisted" if result["match"] else "Rejected"
+            failure_reason = (
+                ""
+                if result["match"]
+                else str(result.get("failure_reason") or "Did not meet screening criteria")
+            )
 
             print("\n======================")
             print("RESULT")
@@ -490,6 +506,7 @@ async def cv_worker_loop():
             print("Qualifications:", result["qual_ok"])
             print("Experience:", result["exp_ok"])
             print("Score:", result.get("score"))
+            print("Failure reason:", failure_reason or "(none)")
             print("FINAL STATUS:", status)
             print("======================\n")
 
@@ -513,6 +530,7 @@ async def cv_worker_loop():
                 "file_name": file_name,
                 "file_url": file_url,
                 "status": status,
+                "failure_reason": failure_reason,
                 "method": method,
                 "match_result": result,
                 "processed_at": time.time()
@@ -524,15 +542,41 @@ async def cv_worker_loop():
                 upsert=True
             )
 
-            db.execute(text("""
-                UPDATE uploads
-                SET status=:status
-                WHERE id=:id
-                AND status='Processing'
-            """), {
-                "status": status,
-                "id": job_id
-            })
+            try:
+                db.execute(text("""
+                    UPDATE uploads
+                    SET status=:status, failure_reason=:failure_reason
+                    WHERE id=:id
+                    AND status='Processing'
+                """), {
+                    "status": status,
+                    "failure_reason": failure_reason or None,
+                    "id": job_id
+                })
+            except Exception as update_err:
+                print("Status+reason update failed, retrying status only:", update_err)
+                db.rollback()
+                db.execute(text("""
+                    UPDATE uploads
+                    SET status=:status
+                    WHERE id=:id
+                    AND status='Processing'
+                """), {
+                    "status": status,
+                    "id": job_id
+                })
+                if failure_reason:
+                    try:
+                        db.execute(text("""
+                            UPDATE uploads
+                            SET failure_reason=:failure_reason
+                            WHERE id=:id
+                        """), {
+                            "failure_reason": failure_reason,
+                            "id": job_id,
+                        })
+                    except Exception as reason_err:
+                        print("Could not persist failure_reason:", reason_err)
 
             db.commit()
 

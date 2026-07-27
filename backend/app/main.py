@@ -57,13 +57,15 @@ async def startup():
         print("Auth tables ready")
 
         from app.routes.upload import (
+            ensure_failure_reason_column,
             ensure_include_internships_column,
             ensure_profession_schema,
         )
 
         ensure_include_internships_column(db)
         ensure_profession_schema(db)
-        print("Profession / internship schema ready")
+        ensure_failure_reason_column(db)
+        print("Profession / internship / failure-reason schema ready")
     finally:
         db.close()
 
