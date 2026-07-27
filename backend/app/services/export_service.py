@@ -363,22 +363,41 @@ def export_batch_shortlisted(
         ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
 
     # Filename uses total CVs in the batch; sheet rows = shortlisted only.
+    # Position slug is required in the name whenever the batch has a profession.
     cv_count = total_cvs if total_cvs is not None else len(candidates)
+    position_slug = slug_position(batch_profession)
     file_name = build_excel_filename(
         cv_count,
         batch_no=batch_no,
         when=stamp,
         position=batch_profession,
     )
+    # Final sanitize always re-injects the position slug if somehow missing.
     file_name = sanitize_excel_filename(file_name, position=batch_profession)
     file_path = os.path.join(EXPORT_DIR, file_name)
 
     if os.path.exists(file_path):
         base, ext = os.path.splitext(file_name)
         file_name = f"{base}_{batch_id[:8]}{ext}"
+        file_name = sanitize_excel_filename(file_name, position=batch_profession)
         file_path = os.path.join(EXPORT_DIR, file_name)
 
-    if batch_profession and slug_position(batch_profession).lower() not in file_name.lower():
+    if position_slug and position_slug.lower() not in file_name.lower():
+        # Last-resort insert before the count suffix.
+        if re.search(r"-\d+CVs\.xlsx$", file_name, flags=re.IGNORECASE):
+            file_name = re.sub(
+                r"-(\d+CVs\.xlsx)$",
+                rf"-{position_slug}-\1",
+                file_name,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            base, ext = os.path.splitext(file_name)
+            file_name = f"{base}-{position_slug}{ext or '.xlsx'}"
+        file_path = os.path.join(EXPORT_DIR, file_name)
+
+    if position_slug and position_slug.lower() not in file_name.lower():
         raise RuntimeError(
             f"Excel filename missing batch position '{batch_profession}': {file_name}"
         )
