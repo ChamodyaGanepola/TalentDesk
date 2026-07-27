@@ -653,14 +653,8 @@ export default function DashboardPage() {
         const currentBatchId = activeBatchIdRef.current;
 
         if (data.event === "stats_update") {
-          setStats((prev) => ({
-            total: data.total ?? prev.total,
-            pending: data.pending ?? prev.pending,
-            processing: data.processing ?? prev.processing,
-            shortlisted: data.shortlisted ?? prev.shortlisted,
-            rejected: data.rejected ?? prev.rejected,
-            failed: data.failed ?? prev.failed,
-          }));
+          // Prefer auth-scoped HTTP stats over global WS payload counts.
+          refreshDashboard();
 
           fetchRecentUploads({
             silent: true,
@@ -973,8 +967,11 @@ export default function DashboardPage() {
 
                     {draftDateFilteredBatches.length === 0 ? (
                       <div className="px-4 py-3 text-sm text-slate-500 border-t">
-                        No batches
-                        {draftFilterDate ? ` on ${draftFilterDate}` : ""}.
+                        {batches.length === 0
+                          ? "No batches yet. Upload CVs to create one."
+                          : `No batches${
+                              draftFilterDate ? ` on ${draftFilterDate}` : ""
+                            }.`}
                       </div>
                     ) : (
                       draftDateFilteredBatches.map((batch) => (
@@ -1054,9 +1051,24 @@ export default function DashboardPage() {
 
         {loadingUploads && uploads.length === 0 ? (
           <UploadListSkeleton />
+        ) : batches.length === 0 ? (
+          <div className="text-center py-12 px-4">
+            <p className="text-lg font-medium text-slate-700">No batches yet</p>
+            <p className="text-sm text-slate-500 mt-2 max-w-md mx-auto">
+              You have no CV batches. Upload CVs to create your first batch and
+              see recent uploads here.
+            </p>
+          </div>
         ) : uploads.length === 0 ? (
-          <div className="text-center py-10 text-slate-500">
-            No uploads found.
+          <div className="text-center py-10 px-4">
+            <p className="text-lg font-medium text-slate-700">No uploads found</p>
+            <p className="text-sm text-slate-500 mt-2">
+              {filterDate
+                ? `No CVs match this filter for ${filterDate}.`
+                : selectedBatchId !== "latest" && selectedBatchId !== "all"
+                ? "This batch has no CVs to show."
+                : "No recent uploads match the current filter."}
+            </p>
           </div>
         ) : (
           <div className="space-y-4">

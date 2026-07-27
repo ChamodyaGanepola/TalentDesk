@@ -20,17 +20,33 @@ def safe_join(values):
 
 
 def get_batch_number_for_day(db, batch_id: str, batch_created_at: datetime | None) -> int:
-    """Batch-1 = first batch on that Sri Lankan calendar day."""
+    """Batch-1 = first batch on that Sri Lankan calendar day (per user)."""
     if not db or not batch_id:
         return 1
 
     try:
-        rows = db.execute(text("""
-            SELECT batch_id, created_at
+        owner_id = db.execute(text("""
+            SELECT user_id
             FROM upload_batches
-            WHERE created_at IS NOT NULL
-            ORDER BY created_at ASC
-        """)).mappings().all()
+            WHERE batch_id = :batch_id
+            LIMIT 1
+        """), {"batch_id": batch_id}).scalar()
+
+        if owner_id is not None:
+            rows = db.execute(text("""
+                SELECT batch_id, created_at
+                FROM upload_batches
+                WHERE created_at IS NOT NULL
+                  AND user_id = :user_id
+                ORDER BY created_at ASC
+            """), {"user_id": int(owner_id)}).mappings().all()
+        else:
+            rows = db.execute(text("""
+                SELECT batch_id, created_at
+                FROM upload_batches
+                WHERE created_at IS NOT NULL
+                ORDER BY created_at ASC
+            """)).mappings().all()
 
         target = None
         for row in rows:

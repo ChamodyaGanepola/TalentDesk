@@ -25,10 +25,7 @@ import {
   fetchMasters,
   getCachedMasters,
 } from "@/app/lib/mastersCache";
-import { authFetch, getAuthHeaders } from "@/app/lib/auth";
-import { getApiBase } from "@/app/lib/api";
-
-const API = getApiBase();
+import { authFetch } from "@/app/lib/auth";
 
 type Props = {
   files: FileList | null;
@@ -484,11 +481,26 @@ export default function UploadFilterModal({
       formData.append("experience_months", String(totalMonths));
       formData.append("experience_value", String(totalMonths));
 
-      const res = await fetch(`${API}/upload/cvs`, {
+      // Do not set Content-Type — browser must add multipart boundary.
+      const res = await authFetch("/upload/cvs", {
         method: "POST",
-        headers: getAuthHeaders(),
         body: formData,
       });
+
+      if (!res) {
+        onUploadFailed?.();
+        setMessage("Cannot reach the server. Check that the backend is running.");
+        showToast("Cannot reach the server.", "error");
+        return;
+      }
+
+      if (res.status === 401) {
+        onUploadFailed?.();
+        setMessage("Your session expired. Please sign in again.");
+        showToast("Session expired. Please sign in again.", "error");
+        window.location.href = "/";
+        return;
+      }
 
       const data = await res.json();
 
@@ -502,7 +514,7 @@ export default function UploadFilterModal({
       const failedMessage =
         data.failed_files
           ?.map((f: FailedFile) => `${f.file}: ${f.error}`)
-          .join("\n") || data.message || "Upload failed.";
+          .join("\n") || data.message || data.detail || "Upload failed.";
 
       setMessage(failedMessage);
       showToast("Upload failed. Please review the errors.", "error");

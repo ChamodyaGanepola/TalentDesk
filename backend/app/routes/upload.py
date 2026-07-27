@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form, Body, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Body, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.core.auth import get_current_user
@@ -20,6 +20,13 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
+
+
+def parse_user_id(user: dict) -> int:
+    try:
+        return int(user["id"])
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid user session") from e
 
 _indexes_ready = False
 
@@ -173,6 +180,122 @@ def ensure_failure_reason_column(db: Session):
             pass
 
     _failure_reason_ready = True
+
+
+_batch_user_ready = False
+
+
+def ensure_batch_user_isolation(db: Session):
+    """
+    Scope batches (and thus uploads/exports) to a user.
+    Existing rows are assigned to the oldest user currently in the DB.
+    """
+    global _batch_user_ready
+    if _batch_user_ready:
+        return
+
+    try:
+        col = db.execute(text("""
+            SELECT COUNT(*) AS cnt
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'upload_batches'
+              AND COLUMN_NAME = 'user_id'
+        """)).scalar()
+
+        if int(col or 0) == 0:
+            db.execute(text("""
+                ALTER TABLE upload_batches
+                ADD COLUMN user_id INT NULL
+            """))
+            db.commit()
+            print("Added upload_batches.user_id column")
+    except Exception as e:
+        print("upload_batches.user_id ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    try:
+        owner_id = db.execute(text("""
+            SELECT id FROM users
+            ORDER BY id ASC
+            LIMIT 1
+        """)).scalar()
+
+        if owner_id is not None:
+            db.execute(text("""
+                UPDATE upload_batches
+                SET user_id = :user_id
+                WHERE user_id IS NULL
+            """), {"user_id": int(owner_id)})
+            db.commit()
+            print(f"Backfilled upload_batches.user_id -> user {owner_id}")
+
+            try:
+                db.execute(text("""
+                    ALTER TABLE upload_batches
+                    MODIFY COLUMN user_id INT NOT NULL
+                """))
+                db.commit()
+            except Exception as e:
+                print("upload_batches.user_id NOT NULL ensure:", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+        else:
+            print("No users found to own existing batches; user_id left nullable")
+    except Exception as e:
+        print("upload_batches.user_id backfill:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    try:
+        idx = db.execute(text("""
+            SELECT COUNT(*) AS cnt
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'upload_batches'
+              AND INDEX_NAME = 'idx_upload_batches_user_created'
+        """)).scalar()
+        if int(idx or 0) == 0:
+            db.execute(text("""
+                CREATE INDEX idx_upload_batches_user_created
+                ON upload_batches (user_id, created_at)
+            """))
+            db.commit()
+    except Exception as e:
+        print("upload_batches user index ensure:", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    _batch_user_ready = True
+
+
+def user_owns_batch(db: Session, batch_id: str, user_id: int) -> bool:
+    ensure_batch_user_isolation(db)
+    row = db.execute(text("""
+        SELECT 1
+        FROM upload_batches
+        WHERE batch_id = :batch_id
+          AND user_id = :user_id
+        LIMIT 1
+    """), {
+        "batch_id": batch_id,
+        "user_id": user_id,
+    }).fetchone()
+    return row is not None
+
+
+def require_batch_owner(db: Session, batch_id: str, user_id: int) -> None:
+    if not user_owns_batch(db, batch_id, user_id):
+        raise HTTPException(status_code=404, detail="Batch not found")
 
 
 def ensure_profession_schema(db: Session):
@@ -454,10 +577,12 @@ async def upload_cvs(
     include_internships: str = Form("yes"),
     profession: str = Form(""),
     intern_label: str = Form(""),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
     uploaded_files = []
     failed_files = []
+    user_id = parse_user_id(user)
 
     parsed_skills = safe_json(skills)
     parsed_qualifications = safe_json(qualifications)
@@ -495,6 +620,7 @@ async def upload_cvs(
         ensure_experience_stored_as_months(db)
         ensure_include_internships_column(db)
         ensure_profession_schema(db)
+        ensure_batch_user_isolation(db)
 
         if batch_profession:
             batch_profession = get_or_create_profession(db, batch_profession) or batch_profession
@@ -504,9 +630,10 @@ async def upload_cvs(
         # =========================
         db.execute(text("""
             INSERT INTO upload_batches
-            (batch_id, experience_type, experience_value, include_internships, profession, intern_label, created_at)
+            (batch_id, user_id, experience_type, experience_value, include_internships, profession, intern_label, created_at)
             VALUES (
                 :batch_id,
+                :user_id,
                 :experience_type,
                 :experience_value,
                 :include_internships,
@@ -516,6 +643,7 @@ async def upload_cvs(
             )
         """), {
             "batch_id": batch_id,
+            "user_id": user_id,
             "experience_type": experience_type,
             "experience_value": stored_months,
             "include_internships": 1 if include_internships_flag else 0,
@@ -668,6 +796,7 @@ def recent_uploads(
     batch_id: str | None = Query(None),
     date: str | None = Query(None),
     db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
     """
     Keyset-paginated recent uploads (default 10/page).
@@ -675,20 +804,23 @@ def recent_uploads(
     """
     _ensure_indexes(db)
     ensure_failure_reason_column(db)
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
 
     page_size = clamp_page_size(per_page)
     fetch_limit = page_size + 1
 
-    where_parts = ["1=1"]
-    params: dict = {"fetch_limit": fetch_limit}
+    where_parts = ["ub.user_id = :user_id"]
+    params: dict = {"fetch_limit": fetch_limit, "user_id": user_id}
 
     if batch_id:
-        where_parts.append("batch_id = :batch_id")
+        require_batch_owner(db, batch_id, user_id)
+        where_parts.append("u.batch_id = :batch_id")
         params["batch_id"] = batch_id
 
     if date:
         where_parts.append(
-            "DATE(DATE_ADD(created_at, INTERVAL 330 MINUTE)) = :date"
+            "DATE(DATE_ADD(u.created_at, INTERVAL 330 MINUTE)) = :date"
         )
         params["date"] = date
 
@@ -699,8 +831,8 @@ def recent_uploads(
         if cursor_created is not None and cursor_id is not None:
             where_parts.append("""
                 (
-                    created_at < :cursor_created
-                    OR (created_at = :cursor_created AND id < :cursor_id)
+                    u.created_at < :cursor_created
+                    OR (u.created_at = :cursor_created AND u.id < :cursor_id)
                 )
             """)
             params["cursor_created"] = cursor_created
@@ -709,10 +841,11 @@ def recent_uploads(
     where_sql = " AND ".join(where_parts)
 
     rows = db.execute(text(f"""
-        SELECT id, batch_id, file_name, file_url, status, failure_reason, created_at
-        FROM uploads
+        SELECT u.id, u.batch_id, u.file_name, u.file_url, u.status, u.failure_reason, u.created_at
+        FROM uploads u
+        INNER JOIN upload_batches ub ON ub.batch_id = u.batch_id
         WHERE {where_sql}
-        ORDER BY created_at DESC, id DESC
+        ORDER BY u.created_at DESC, u.id DESC
         LIMIT :fetch_limit
     """), params).mappings().all()
 
@@ -761,31 +894,53 @@ def recent_uploads(
 # STATS
 # =========================
 @router.get("/upload/stats/total")
-def total(db: Session = Depends(get_db)):
+def total(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
     return db.execute(text("""
-        SELECT COUNT(*) as count FROM uploads
-    """)).mappings().first()
+        SELECT COUNT(*) as count
+        FROM uploads u
+        INNER JOIN upload_batches ub ON ub.batch_id = u.batch_id
+        WHERE ub.user_id = :user_id
+    """), {"user_id": user_id}).mappings().first()
 
 
 @router.get("/upload/stats/pending")
-def pending(db: Session = Depends(get_db)):
+def pending(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
     return db.execute(text("""
-        SELECT COUNT(*) as count FROM uploads WHERE status='Uploaded'
-    """)).mappings().first()
+        SELECT COUNT(*) as count
+        FROM uploads u
+        INNER JOIN upload_batches ub ON ub.batch_id = u.batch_id
+        WHERE ub.user_id = :user_id
+          AND u.status='Uploaded'
+    """), {"user_id": user_id}).mappings().first()
 
 
 @router.get("/upload/stats/shortlisted")
-def shortlisted(db: Session = Depends(get_db)):
+def shortlisted(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
     return db.execute(text("""
-        SELECT COUNT(*) as count FROM uploads WHERE status='Shortlisted'
-    """)).mappings().first()
+        SELECT COUNT(*) as count
+        FROM uploads u
+        INNER JOIN upload_batches ub ON ub.batch_id = u.batch_id
+        WHERE ub.user_id = :user_id
+          AND u.status='Shortlisted'
+    """), {"user_id": user_id}).mappings().first()
 
 
 # =========================
 # SHORTLISTED BY BATCH
 # =========================
 @router.get("/resume/shortlisted/{batch_id}")
-def get_shortlisted(batch_id: str, db: Session = Depends(get_db)):
+def get_shortlisted(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    require_batch_owner(db, batch_id, parse_user_id(user))
     rows = db.execute(text("""
         SELECT *
         FROM uploads
@@ -811,7 +966,12 @@ def get_shortlisted(batch_id: str, db: Session = Depends(get_db)):
 # EXPORT
 # =========================
 @router.get("/resume/export/{batch_id}")
-def get_export(batch_id: str, db: Session = Depends(get_db)):
+def get_export(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    require_batch_owner(db, batch_id, parse_user_id(user))
     row = db.execute(text("""
         SELECT excel_file, created_at
         FROM batch_exports
@@ -832,8 +992,14 @@ def get_export(batch_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/resume/export/{batch_id}/regenerate")
-def regenerate_export(batch_id: str, db: Session = Depends(get_db)):
+def regenerate_export(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
     from app.services.export_service import export_batch_shortlisted
+
+    require_batch_owner(db, batch_id, parse_user_id(user))
 
     total_count = db.execute(text("""
         SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
@@ -913,38 +1079,43 @@ def get_excels(
     date: str = Query(None),
     batch_id: str = Query(None),
     db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
 ):
     """Keyset-paginated Excel exports (default 10/page), ordered by id DESC."""
     _ensure_indexes(db)
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
 
     page_size = clamp_page_size(per_page)
     fetch_limit = page_size + 1
 
-    where_parts = []
-    params: dict = {"fetch_limit": fetch_limit}
+    where_parts = ["ub.user_id = :user_id"]
+    params: dict = {"fetch_limit": fetch_limit, "user_id": user_id}
 
     if date:
         where_parts.append(
-            "DATE(DATE_ADD(created_at, INTERVAL 330 MINUTE)) = :date"
+            "DATE(DATE_ADD(be.created_at, INTERVAL 330 MINUTE)) = :date"
         )
         params["date"] = date
 
     if batch_id:
-        where_parts.append("batch_id = :batch_id")
+        require_batch_owner(db, batch_id, user_id)
+        where_parts.append("be.batch_id = :batch_id")
         params["batch_id"] = batch_id
 
     cursor_data = decode_cursor(cursor)
     if cursor_data and cursor_data.get("id") is not None:
-        where_parts.append("id < :cursor_id")
+        where_parts.append("be.id < :cursor_id")
         params["cursor_id"] = int(cursor_data["id"])
 
-    where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    where_sql = f" WHERE {' AND '.join(where_parts)}"
 
     sql = f"""
-        SELECT id, batch_id, excel_file, created_at
-        FROM batch_exports
+        SELECT be.id, be.batch_id, be.excel_file, be.created_at
+        FROM batch_exports be
+        INNER JOIN upload_batches ub ON ub.batch_id = be.batch_id
         {where_sql}
-        ORDER BY id DESC
+        ORDER BY be.id DESC
         LIMIT :fetch_limit
     """
 
@@ -972,17 +1143,21 @@ def get_excels(
     }
     
 @router.get("/upload/stats/all")
-def all_stats(db: Session = Depends(get_db)):
+def all_stats(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
     row = db.execute(text("""
         SELECT
             COUNT(*) AS total,
-            SUM(CASE WHEN status='Uploaded' THEN 1 ELSE 0 END) AS pending,
-            SUM(CASE WHEN status='Processing' THEN 1 ELSE 0 END) AS processing,
-            SUM(CASE WHEN status='Shortlisted' THEN 1 ELSE 0 END) AS shortlisted,
-            SUM(CASE WHEN status='Rejected' THEN 1 ELSE 0 END) AS rejected,
-            SUM(CASE WHEN status='Failed' THEN 1 ELSE 0 END) AS failed
-        FROM uploads
-    """)).mappings().first()
+            SUM(CASE WHEN u.status='Uploaded' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN u.status='Processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN u.status='Shortlisted' THEN 1 ELSE 0 END) AS shortlisted,
+            SUM(CASE WHEN u.status='Rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN u.status='Failed' THEN 1 ELSE 0 END) AS failed
+        FROM uploads u
+        INNER JOIN upload_batches ub ON ub.batch_id = u.batch_id
+        WHERE ub.user_id = :user_id
+    """), {"user_id": user_id}).mappings().first()
 
     return {
         "total": row["total"] or 0,
@@ -993,10 +1168,12 @@ def all_stats(db: Session = Depends(get_db)):
         "failed": row["failed"] or 0,
     }
 @router.get("/upload/batches")
-def get_batches(db: Session = Depends(get_db)):
+def get_batches(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     ensure_experience_stored_as_months(db)
     ensure_include_internships_column(db)
     ensure_profession_schema(db)
+    ensure_batch_user_isolation(db)
+    user_id = parse_user_id(user)
 
     rows = db.execute(text("""
         SELECT
@@ -1015,9 +1192,10 @@ def get_batches(db: Session = Depends(get_db)):
             SUM(CASE WHEN u.status='Failed' THEN 1 ELSE 0 END) AS failed
         FROM upload_batches ub
         LEFT JOIN uploads u ON u.batch_id = ub.batch_id
+        WHERE ub.user_id = :user_id
         GROUP BY ub.batch_id, ub.experience_type, ub.experience_value, ub.include_internships, ub.profession, ub.intern_label, ub.created_at
         ORDER BY COALESCE(ub.created_at, MIN(u.created_at)) DESC
-    """)).mappings().all()
+    """), {"user_id": user_id}).mappings().all()
 
     return [
         {
@@ -1042,11 +1220,16 @@ def get_batches(db: Session = Depends(get_db)):
 # BATCH DETAILS
 # =========================
 @router.get("/upload/batch/{batch_id}")
-def get_batch_details(batch_id: str, db: Session = Depends(get_db)):
+def get_batch_details(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
     ensure_experience_stored_as_months(db)
     ensure_include_internships_column(db)
     ensure_profession_schema(db)
     ensure_failure_reason_column(db)
+    require_batch_owner(db, batch_id, parse_user_id(user))
 
     batch = db.execute(text("""
         SELECT

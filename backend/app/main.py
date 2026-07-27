@@ -57,6 +57,7 @@ async def startup():
         print("Auth tables ready")
 
         from app.routes.upload import (
+            ensure_batch_user_isolation,
             ensure_failure_reason_column,
             ensure_include_internships_column,
             ensure_profession_schema,
@@ -65,7 +66,8 @@ async def startup():
         ensure_include_internships_column(db)
         ensure_profession_schema(db)
         ensure_failure_reason_column(db)
-        print("Profession / internship / failure-reason schema ready")
+        ensure_batch_user_isolation(db)
+        print("Profession / internship / failure-reason / user-isolation schema ready")
     finally:
         db.close()
 

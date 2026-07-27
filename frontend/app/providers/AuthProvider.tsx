@@ -3,6 +3,7 @@
 import {
   AuthUser,
   fetchCurrentUser,
+  getAccessToken,
   getStoredUser,
   logoutSession,
   setSession,
@@ -85,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       loading,
-      isAuthenticated: Boolean(user),
+      isAuthenticated: Boolean(user) && Boolean(getAccessToken()),
       login,
       logout,
       refreshUser,
