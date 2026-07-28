@@ -2,11 +2,25 @@
 from __future__ import annotations
 
 import os
+import re
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.services.export_service import verify_shortlisted_export
+
+
+def download_excel_name(file_name: str) -> str:
+    """Hide internal batch-id/collision suffixes in browser downloads."""
+    name = str(file_name or "").strip()
+    if not name:
+        return ""
+    return re.sub(
+        r"_[0-9a-f]{8}(?:_\d+)?(?=\.xlsx$)",
+        "",
+        name,
+        flags=re.IGNORECASE,
+    )
 
 
 def persist_verified_export(db: Session, batch_id: str, export_result: dict) -> dict:
@@ -60,8 +74,9 @@ def persist_verified_export(db: Session, batch_id: str, export_result: dict) -> 
     return {
         "success": True,
         "excel_file": file_path,
-        "excel_name": export_result.get("file_name")
-        or os.path.basename(file_path),
+        "excel_name": download_excel_name(
+            export_result.get("file_name") or os.path.basename(file_path)
+        ),
         "created_at": export_result["generated_at"].isoformat(),
         "generated_at_sl": export_result.get("generated_at_sl"),
     }

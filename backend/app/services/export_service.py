@@ -138,6 +138,19 @@ def sanitize_excel_filename(file_name: str, position: str = "") -> str:
     return cleaned
 
 
+def append_batch_suffix(file_name: str, batch_id: str) -> str:
+    """Always include a short batch-id suffix before the extension."""
+    suffix = str(batch_id or "").strip()[:8]
+    if not suffix:
+        return file_name
+
+    base, ext = os.path.splitext(file_name)
+    marker = f"_{suffix}"
+    if base.endswith(marker):
+        return f"{base}{ext or '.xlsx'}"
+    return f"{base}{marker}{ext or '.xlsx'}"
+
+
 def candidate_experience_months(candidate: dict) -> int:
     """Prefer screening-computed months stored on the candidate."""
     raw = candidate.get("experience_months")
@@ -389,7 +402,6 @@ def export_batch_shortlisted(
         "Skills",
         EXPERIENCE_COLUMN_HEADER,
         "Professional Qualifications",
-        "CV Profession",
     ]
 
     ws.append(headers)
@@ -416,7 +428,6 @@ def export_batch_shortlisted(
             safe_join(candidate.get("skills", [])),
             experience_cell,
             safe_join(candidate.get("qualifications", [])),
-            candidate.get("profession", "") or "",
         ])
 
     ws.freeze_panes = "A2"
@@ -442,13 +453,14 @@ def export_batch_shortlisted(
         when=stamp,
         position=batch_profession,
     )
+    file_name = append_batch_suffix(file_name, batch_id)
     # Final sanitize always re-injects the position slug if somehow missing.
     file_name = sanitize_excel_filename(file_name, position=batch_profession)
     file_path = os.path.join(EXPORT_DIR, file_name)
 
     if os.path.exists(file_path):
         base, ext = os.path.splitext(file_name)
-        file_name = f"{base}_{batch_id[:8]}{ext}"
+        file_name = f"{base}_1{ext}"
         file_name = sanitize_excel_filename(file_name, position=batch_profession)
         file_path = os.path.join(EXPORT_DIR, file_name)
 
