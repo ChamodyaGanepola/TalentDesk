@@ -99,26 +99,21 @@ function getExcelUrl(excelFile: string | null) {
   return `${API}/exports/${cleanFile.split("/").pop()}`;
 }
 
-async function regenerateAndDownloadExcel(
-  batchId: string,
-  fallbackFile?: string | null
-) {
+async function regenerateAndDownloadExcel(batchId: string) {
   const regenRes = await fetch(`${API}/resume/export/${batchId}/regenerate`, {
     method: "POST",
     headers: getAuthHeaders(),
   });
 
-  let excelPath = fallbackFile || null;
-
-  if (regenRes.ok) {
-    const data = await regenRes.json();
-    if (data?.excel_file) {
-      excelPath = String(data.excel_file);
-    }
-  }
+  const data = regenRes.ok ? await regenRes.json() : null;
+  const excelPath = data?.excel_file
+    ? String(data.excel_file).replace(/\\/g, "/")
+    : null;
 
   if (!excelPath) {
-    throw new Error("Excel file not available");
+    throw new Error(
+      data?.message || "Excel could not be regenerated. Please try again."
+    );
   }
 
   const fileUrl = getExcelUrl(excelPath);
@@ -188,8 +183,8 @@ function BatchDetailsContent() {
 
       const nextBatch: Batch = data.batch;
 
-      // Fallback: if shortlisted but excel missing on batch payload, check export API.
-      if (!nextBatch.excel_file && (nextBatch.shortlisted || 0) > 0) {
+      // Regenerate export so Total Experience uses "X years Y months (N months)".
+      if ((nextBatch.shortlisted || 0) > 0) {
         try {
           const exportRes = await fetch(`${API}/resume/export/${batchId}`, {
             headers: getAuthHeaders(),
@@ -206,7 +201,7 @@ function BatchDetailsContent() {
             }
           }
         } catch (error) {
-          console.error("Excel fallback fetch failed:", error);
+          console.error("Excel refresh failed:", error);
         }
       }
 
@@ -323,8 +318,7 @@ function BatchDetailsContent() {
                             setDownloadingExcel(true);
                             try {
                               const path = await regenerateAndDownloadExcel(
-                                batchId,
-                                batch.excel_file
+                                batchId
                               );
                               setBatch((prev) =>
                                 prev

@@ -142,15 +142,16 @@ function ResumeViewerContent() {
         }
       );
 
-      let excelPath = file.file;
-      if (regenRes.ok) {
-        const data = await regenRes.json();
-        if (data?.excel_file) {
-          excelPath = String(data.excel_file);
-        }
-      }
+      const data = regenRes.ok ? await regenRes.json() : null;
+      const excelPath = data?.excel_file
+        ? String(data.excel_file).replace(/\\/g, "/")
+        : null;
 
-      const res = await fetch(getExcelUrl(excelPath), {
+      if (!excelPath) {
+        throw new Error(
+          data?.message || "Excel could not be regenerated. Please try again."
+        );
+      }
         headers: getAuthHeaders(),
       });
 
