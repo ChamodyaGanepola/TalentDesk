@@ -11,4 +11,4 @@ Start-Sleep -Seconds 2
 
 Set-Location $PSScriptRoot\..
 $env:TALENTDESK_PRIMARY_API = "1"
-& .\venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port $Port
+& .\venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port $Port
