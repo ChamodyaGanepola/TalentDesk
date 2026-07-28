@@ -1,7 +1,7 @@
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from app.db_mongo import cv_collection
-from app.services.utils_experience import resolve_experience_months
+from app.services.utils_experience import months_to_label, resolve_experience_months
 from app.services.timezone_sl import now_sri_lanka, now_utc_naive, to_sri_lanka
 from datetime import datetime
 from sqlalchemy import text
@@ -138,7 +138,33 @@ def sanitize_excel_filename(file_name: str, position: str = "") -> str:
 
 
 def candidate_experience_months(candidate: dict) -> int:
+    """Prefer screening-computed months stored on the candidate."""
+    raw = candidate.get("experience_months")
+    if raw is not None:
+        try:
+            return max(int(round(float(raw))), 0)
+        except Exception:
+            pass
     return resolve_experience_months(candidate)
+
+
+def format_experience_for_excel(total_months, label: str | None = None) -> str:
+    """e.g. 38 → '3 years 2 months (38 months)'."""
+    try:
+        months = max(int(total_months or 0), 0)
+    except Exception:
+        months = 0
+
+    text = " ".join(str(label or "").strip().split())
+    if not text:
+        text = months_to_label(months)
+
+    # Already formatted (e.g. re-export of a labeled value).
+    if re.search(r"\(\d+\s*months?\)$", text, flags=re.IGNORECASE):
+        return text
+
+    unit = "month" if months == 1 else "months"
+    return f"{text} ({months} {unit})"
 
 
 def _is_shortlisted(status) -> bool:
@@ -337,7 +363,7 @@ def export_batch_shortlisted(
         "Email Address",
         "Contact No",
         "Skills",
-        "Total Work Experience (months)",
+        "Total Experience",
         "Professional Qualifications",
         "CV Profession",
     ]
@@ -349,6 +375,10 @@ def export_batch_shortlisted(
 
     for index, candidate in enumerate(candidates, start=1):
         months = candidate_experience_months(candidate)
+        experience_cell = format_experience_for_excel(
+            months,
+            label=candidate.get("experience_label"),
+        )
 
         ws.append([
             index,
@@ -360,7 +390,7 @@ def export_batch_shortlisted(
             candidate.get("email", "") or "",
             candidate.get("contact_no", "") or "",
             safe_join(candidate.get("skills", [])),
-            months,
+            experience_cell,
             safe_join(candidate.get("qualifications", [])),
             candidate.get("profession", "") or "",
         ])

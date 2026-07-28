@@ -965,72 +965,7 @@ def get_shortlisted(
 # =========================
 # EXPORT
 # =========================
-@router.get("/resume/export/{batch_id}")
-def get_export(
-    batch_id: str,
-    db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    require_batch_owner(db, batch_id, parse_user_id(user))
-    row = db.execute(text("""
-        SELECT excel_file, created_at
-        FROM batch_exports
-        WHERE batch_id = :batch_id
-        ORDER BY id DESC
-        LIMIT 1
-    """), {
-        "batch_id": batch_id
-    }).mappings().first()
-
-    if not row:
-        return {"excel_file": None, "created_at": None}
-
-    return {
-        "excel_file": row["excel_file"],
-        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-    }
-
-
-@router.post("/resume/export/{batch_id}/regenerate")
-def regenerate_export(
-    batch_id: str,
-    db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    from app.services.export_service import export_batch_shortlisted
-
-    require_batch_owner(db, batch_id, parse_user_id(user))
-
-    total_count = db.execute(text("""
-        SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
-    """), {"batch_id": batch_id}).scalar() or 0
-
-    batch_profession = ""
-    try:
-        batch_profession = str(
-            db.execute(text("""
-                SELECT profession FROM upload_batches
-                WHERE batch_id = :batch_id LIMIT 1
-            """), {"batch_id": batch_id}).scalar()
-            or ""
-        ).strip()
-    except Exception:
-        batch_profession = ""
-
-    export_result = export_batch_shortlisted(
-        batch_id,
-        total_cvs=total_count,
-        db=db,
-        position=batch_profession,
-    )
-
-    if not export_result:
-        return {
-            "success": False,
-            "message": "No shortlisted candidates to export",
-            "excel_file": None,
-        }
-
+def _persist_export_result(db: Session, batch_id: str, export_result: dict) -> dict:
     existing = db.execute(text("""
         SELECT id FROM batch_exports
         WHERE batch_id = :batch_id
@@ -1067,6 +1002,90 @@ def regenerate_export(
         "created_at": export_result["generated_at"].isoformat(),
         "generated_at_sl": export_result.get("generated_at_sl"),
     }
+
+
+def _generate_batch_export(db: Session, batch_id: str) -> dict | None:
+    from app.services.export_service import export_batch_shortlisted
+
+    total_count = db.execute(text("""
+        SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
+    """), {"batch_id": batch_id}).scalar() or 0
+
+    batch_profession = ""
+    try:
+        batch_profession = str(
+            db.execute(text("""
+                SELECT profession FROM upload_batches
+                WHERE batch_id = :batch_id LIMIT 1
+            """), {"batch_id": batch_id}).scalar()
+            or ""
+        ).strip()
+    except Exception:
+        batch_profession = ""
+
+    return export_batch_shortlisted(
+        batch_id,
+        total_cvs=total_count,
+        db=db,
+        position=batch_profession,
+    )
+
+
+@router.get("/resume/export/{batch_id}")
+def get_export(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Return export path, regenerating so format/content stay current."""
+    require_batch_owner(db, batch_id, parse_user_id(user))
+
+    export_result = _generate_batch_export(db, batch_id)
+    if export_result:
+        saved = _persist_export_result(db, batch_id, export_result)
+        return {
+            "excel_file": saved["excel_file"],
+            "created_at": saved["created_at"],
+            "excel_name": saved.get("excel_name"),
+        }
+
+    row = db.execute(text("""
+        SELECT excel_file, created_at
+        FROM batch_exports
+        WHERE batch_id = :batch_id
+        ORDER BY id DESC
+        LIMIT 1
+    """), {
+        "batch_id": batch_id
+    }).mappings().first()
+
+    if not row:
+        return {"excel_file": None, "created_at": None}
+
+    return {
+        "excel_file": row["excel_file"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+@router.post("/resume/export/{batch_id}/regenerate")
+def regenerate_export(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    require_batch_owner(db, batch_id, parse_user_id(user))
+
+    export_result = _generate_batch_export(db, batch_id)
+
+    if not export_result:
+        return {
+            "success": False,
+            "message": "No shortlisted candidates to export",
+            "excel_file": None,
+        }
+
+    return _persist_export_result(db, batch_id, export_result)
 
 
 # =========================

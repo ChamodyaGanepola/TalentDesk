@@ -99,6 +99,48 @@ function getExcelUrl(excelFile: string | null) {
   return `${API}/exports/${cleanFile.split("/").pop()}`;
 }
 
+async function regenerateAndDownloadExcel(
+  batchId: string,
+  fallbackFile?: string | null
+) {
+  const regenRes = await fetch(`${API}/resume/export/${batchId}/regenerate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+
+  let excelPath = fallbackFile || null;
+
+  if (regenRes.ok) {
+    const data = await regenRes.json();
+    if (data?.excel_file) {
+      excelPath = String(data.excel_file);
+    }
+  }
+
+  if (!excelPath) {
+    throw new Error("Excel file not available");
+  }
+
+  const fileUrl = getExcelUrl(excelPath);
+  const res = await fetch(fileUrl, { headers: getAuthHeaders() });
+  if (!res.ok) {
+    throw new Error("Download failed");
+  }
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download =
+    excelPath.replace(/\\/g, "/").split("/").pop() || "shortlisted.xlsx";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+
+  return excelPath;
+}
+
 function getUploadUrl(storedFile: string) {
   const cleanFile = storedFile.replace(/\\/g, "/").replace(/^\/+/, "");
 
@@ -119,6 +161,7 @@ function BatchDetailsContent() {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"All" | UploadStatus>("All");
   const [draftStatusFilter, setDraftStatusFilter] = useState<"All" | UploadStatus>("All");
 
@@ -272,15 +315,50 @@ function BatchDetailsContent() {
                             Generated: {formatSLDateTime(batch.excel_created_at)}
                           </p>
                         ) : null}
-                        <a
-                          href={getExcelUrl(batch.excel_file)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 mt-3 text-sm font-medium text-green-800 hover:text-green-950"
+                        <button
+                          type="button"
+                          disabled={downloadingExcel || !batchId}
+                          onClick={async () => {
+                            if (!batchId) return;
+                            setDownloadingExcel(true);
+                            try {
+                              const path = await regenerateAndDownloadExcel(
+                                batchId,
+                                batch.excel_file
+                              );
+                              setBatch((prev) =>
+                                prev
+                                  ? {
+                                      ...prev,
+                                      excel_file: path,
+                                      excel_name:
+                                        path.replace(/\\/g, "/").split("/").pop() ||
+                                        prev.excel_name,
+                                      excel_created_at: new Date().toISOString(),
+                                    }
+                                  : prev
+                              );
+                              showToast(
+                                "Excel downloaded with updated experience format.",
+                                "success"
+                              );
+                            } catch (err) {
+                              console.error(err);
+                              showToast(
+                                "Excel download failed. Please try again.",
+                                "error"
+                              );
+                            } finally {
+                              setDownloadingExcel(false);
+                            }
+                          }}
+                          className="inline-flex items-center gap-2 mt-3 text-sm font-medium text-green-800 hover:text-green-950 disabled:opacity-50"
                         >
                           <Download size={16} />
-                          Download Excel
-                        </a>
+                          {downloadingExcel
+                            ? "Preparing Excel..."
+                            : "Download Excel"}
+                        </button>
                       </div>
                     </div>
                   </div>

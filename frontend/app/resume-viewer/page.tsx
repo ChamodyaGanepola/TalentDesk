@@ -134,7 +134,25 @@ function ResumeViewerContent() {
   const downloadExcel = async (file: ExcelFile) => {
     setDownloadingId(file.id);
     try {
-      const res = await fetch(getExcelUrl(file.file), { headers: getAuthHeaders() });
+      const regenRes = await fetch(
+        `${API}/resume/export/${file.batch_id}/regenerate`,
+        {
+          method: "POST",
+          headers: getAuthHeaders(),
+        }
+      );
+
+      let excelPath = file.file;
+      if (regenRes.ok) {
+        const data = await regenRes.json();
+        if (data?.excel_file) {
+          excelPath = String(data.excel_file);
+        }
+      }
+
+      const res = await fetch(getExcelUrl(excelPath), {
+        headers: getAuthHeaders(),
+      });
 
       if (!res.ok) {
         throw new Error("Download failed");
@@ -146,7 +164,7 @@ function ResumeViewerContent() {
       const a = document.createElement("a");
       a.href = url;
       a.download =
-        file.file.replace(/\\/g, "/").split("/").pop() || "resume.xlsx";
+        excelPath.replace(/\\/g, "/").split("/").pop() || "resume.xlsx";
 
       document.body.appendChild(a);
       a.click();
@@ -154,6 +172,9 @@ function ResumeViewerContent() {
 
       window.URL.revokeObjectURL(url);
       showToast("Excel downloaded successfully.", "success");
+
+      // Refresh list so the new filename shows up.
+      fetchFiles(cursorStack[cursorStack.length - 1] ?? null);
     } catch (err) {
       console.error("Download failed:", err);
       showToast("Download failed. Please try again.", "error");
