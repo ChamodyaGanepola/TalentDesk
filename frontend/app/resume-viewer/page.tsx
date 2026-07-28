@@ -19,6 +19,13 @@ type ExcelFile = {
   created_at?: string | null;
 };
 
+type StoredExcelFile = {
+  id: number;
+  batch_id: string;
+  file: string;
+  created_at?: string | null;
+};
+
 const API = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 const PER_PAGE = 10;
 
@@ -27,6 +34,25 @@ function getExcelUrl(filePath: string) {
   if (clean.startsWith("http://") || clean.startsWith("https://")) return clean;
   if (clean.startsWith("exports/")) return `${API}/${clean}`;
   return `${API}/exports/${clean.split("/").pop()}`;
+}
+
+async function refreshExportForBatch(file: StoredExcelFile): Promise<ExcelFile> {
+  const exportRes = await authFetch(`/resume/export/${file.batch_id}`);
+  if (!exportRes?.ok) {
+    return file;
+  }
+
+  const exportData = await exportRes.json().catch(() => null);
+  const refreshedPath = String(exportData?.excel_file || "").replace(/\\/g, "/");
+  if (!refreshedPath) {
+    return file;
+  }
+
+  return {
+    ...file,
+    file: refreshedPath,
+    created_at: exportData?.created_at || file.created_at || null,
+  };
 }
 
 function ResumeViewerContent() {
@@ -86,8 +112,18 @@ function ResumeViewerContent() {
           headers: getAuthHeaders(),
         });
         const data = await res.json();
+        const storedFiles: StoredExcelFile[] = Array.isArray(data.data) ? data.data : [];
+        const refreshedFiles = await Promise.all(
+          storedFiles.map(async (file) => {
+            try {
+              return await refreshExportForBatch(file);
+            } catch {
+              return file;
+            }
+          })
+        );
 
-        setFiles(data.data || []);
+        setFiles(refreshedFiles);
         setNextCursor(data.next_cursor || null);
         setHasMore(Boolean(data.has_more));
       } catch (err) {
