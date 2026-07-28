@@ -72,6 +72,16 @@ async def startup():
     finally:
         db.close()
 
+    try:
+        from app.db_mongo import cv_collection
+        from app.services.mongo_cv_schema import migrate_cv_documents_experience_field
+
+        migrated = migrate_cv_documents_experience_field(cv_collection)
+        if migrated:
+            print(f"Mongo CV schema: migrated {migrated} document(s) to experience array")
+    except Exception as exc:
+        print("Mongo CV schema migration skipped:", exc)
+
     if os.getenv("ENABLE_CV_WORKER", "true").lower() == "true":
         asyncio.create_task(cv_worker_loop())
         print("CV worker started")

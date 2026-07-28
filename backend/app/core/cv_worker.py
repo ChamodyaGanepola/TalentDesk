@@ -13,10 +13,13 @@ from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
 from app.services.export_service import slug_position
 from app.services.utils_experience import (
+    build_experience_array_for_storage,
     months_to_label,
     months_to_years_float,
+    MONGO_CV_LEGACY_FIELD_UNSET,
     parse_include_internships,
     resolve_experience_months,
+    stored_experience_array,
     years_to_months,
 )
 from app.ws.manager import manager
@@ -58,7 +61,7 @@ def parse_experience_months(
 
     return resolve_experience_months(
         extracted,
-        internships=extracted.get("internships"),
+        internships=stored_experience_array(extracted),
         include_internships=include_internships,
         target_profession=target_profession,
         target_intern_label=target_intern_label,
@@ -125,7 +128,7 @@ def load_batch_requirements(db, batch_id: str):
             exp_row[2] if exp_row and len(exp_row) > 2 else True
         )
         batch_profession = str(exp_row[3] or "").strip() if exp_row and len(exp_row) > 3 else ""
-        batch_intern_label = str(exp_row[4] or "").strip() if exp_row and len(exp_row) > 4 else ""
+        batch_experience_label = str(exp_row[4] or "").strip() if exp_row and len(exp_row) > 4 else ""
     except Exception:
         try:
             exp_row = db.execute(text("""
@@ -139,7 +142,7 @@ def load_batch_requirements(db, batch_id: str):
                 exp_row[2] if exp_row and len(exp_row) > 2 else True
             )
             batch_profession = str(exp_row[3] or "").strip() if exp_row and len(exp_row) > 3 else ""
-            batch_intern_label = ""
+            batch_experience_label = ""
         except Exception:
             try:
                 exp_row = db.execute(text("""
@@ -162,7 +165,7 @@ def load_batch_requirements(db, batch_id: str):
                 }).fetchone()
                 include_internships = True
             batch_profession = ""
-            batch_intern_label = ""
+            batch_experience_label = ""
 
     skills = [r[0] for r in skills_rows] if skills_rows else []
     qualifications = [r[0] for r in quals_rows] if quals_rows else []
@@ -174,7 +177,7 @@ def load_batch_requirements(db, batch_id: str):
         "experience_value": exp_row[1] if exp_row else 0,
         "include_internships": include_internships,
         "profession": batch_profession,
-        "intern_label": batch_intern_label,
+        "batch_experience_label": batch_experience_label,
     }
 
 
@@ -461,21 +464,21 @@ async def cv_worker_loop():
             required_exp = req["experience_value"]
             include_internships = req.get("include_internships", True)
             batch_profession = (req.get("profession") or "").strip()
-            batch_intern_label = (req.get("intern_label") or "").strip()
+            batch_experience_label = (req.get("batch_experience_label") or "").strip()
 
             raw_text = read_file(file_url)
 
             print("Raw text length:", len(raw_text))
-            print("Include internships:", include_internships)
+            print("Include trainee experience:", include_internships)
             print("Batch profession:", batch_profession or "(none)")
-            print("Batch intern label:", batch_intern_label or "(auto)")
+            print("Batch experience label:", batch_experience_label or "(auto)")
 
             if len(raw_text.strip()) < 300:
                 extracted = vision_ocr(
                     file_url,
                     include_internships=include_internships,
                     target_profession=batch_profession,
-                    target_intern_label=batch_intern_label,
+                    target_intern_label=batch_experience_label,
                 )
                 method = "vision_ocr"
             else:
@@ -483,7 +486,7 @@ async def cv_worker_loop():
                     raw_text,
                     include_internships=include_internships,
                     target_profession=batch_profession,
-                    target_intern_label=batch_intern_label,
+                    target_intern_label=batch_experience_label,
                 )
                 method = "text_ai"
 
@@ -491,10 +494,14 @@ async def cv_worker_loop():
                 extracted,
                 include_internships=include_internships,
                 target_profession=batch_profession,
-                target_intern_label=batch_intern_label,
+                target_intern_label=batch_experience_label,
             )
             cv_skills = extracted.get("skills", []) or []
             cv_quals = extracted.get("qualifications", []) or []
+            experience_array = build_experience_array_for_storage(
+                extracted,
+                include_trainee_experience=include_internships,
+            )
 
             print("Extracted Experience (months):", cv_exp_months)
             print("Extracted Experience (label):", months_to_label(cv_exp_months))
@@ -507,7 +514,7 @@ async def cv_worker_loop():
                     "qualifications": cv_quals,
                     "experience_months": cv_exp_months,
                     "experience_years": months_to_years_float(cv_exp_months),
-                    "internships": extracted.get("internships", []),
+                    "experience": experience_array,
                 },
                 required_skills=required_skills,
                 required_quals=required_quals,
@@ -515,7 +522,7 @@ async def cv_worker_loop():
                 exp_value=required_exp,
                 include_internships=include_internships,
                 target_profession=batch_profession,
-                target_intern_label=batch_intern_label,
+                target_intern_label=batch_experience_label,
             )
 
             status = "Shortlisted" if result["match"] else "Rejected"
@@ -549,9 +556,9 @@ async def cv_worker_loop():
                 "experience_label": months_to_label(cv_exp_months),
                 "profession": extracted.get("profession"),
                 "batch_profession": batch_profession,
-                "batch_intern_label": batch_intern_label,
-                "internships": extracted.get("internships", []),
-                "include_internships": include_internships,
+                "batch_experience_label": batch_experience_label,
+                "experience": experience_array,
+                "include_trainee_experience": include_internships,
                 "file_name": file_name,
                 "file_url": file_url,
                 "status": status,
@@ -563,8 +570,11 @@ async def cv_worker_loop():
 
             cv_collection.update_one(
                 {"upload_id": job_id},
-                {"$set": mongo_payload},
-                upsert=True
+                {
+                    "$set": mongo_payload,
+                    "$unset": dict(MONGO_CV_LEGACY_FIELD_UNSET),
+                },
+                upsert=True,
             )
 
             try:

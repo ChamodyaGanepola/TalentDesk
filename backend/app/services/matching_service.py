@@ -1,7 +1,7 @@
 from app.services.vector_service import get_embedding, cosine_similarity
 from app.services.qualification_ai import normalize_and_match_qualifications
 from app.services.skill_ai import normalize_and_match_skills
-from app.services.utils_experience import resolve_experience_months
+from app.services.utils_experience import resolve_experience_months, stored_experience_array
 from sqlalchemy import text
 from app.db_mysql import SessionLocal
 
@@ -430,8 +430,8 @@ def evaluate_candidate(
     cv_skills = clean_list(cv.get("skills"))
     cv_quals = cv.get("qualifications", [])
 
-    # Prefer worker-computed months when internships are not attached.
-    if cv.get("internships") is None and cv.get("experience_months") is not None:
+    # Prefer worker-computed months when no experience array is attached.
+    if stored_experience_array(cv) is None and cv.get("experience_months") is not None:
         try:
             cv_months = int(round(float(cv.get("experience_months") or 0)))
         except Exception:

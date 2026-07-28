@@ -235,8 +235,38 @@ ALLOWED_WORK_TYPES = {
     "self employed",
 }
 
-# Alternate keys models sometimes return instead of "internships"
+EXPERIENCE_ARRAY_KEY = "experience"
+_LEGACY_EXPERIENCE_ARRAY_KEYS = ("internships",)
+
+
+def stored_experience_array(data: dict | None) -> list | None:
+    """CV Mongo / extraction payload: canonical experience array (jobs + trainee roles)."""
+    if not isinstance(data, dict):
+        return None
+    for key in (EXPERIENCE_ARRAY_KEY, *_LEGACY_EXPERIENCE_ARRAY_KEYS):
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+    return None
+
+
+def experience_for_storage(entries: list | None) -> list:
+    """Persist work history without legacy type name 'internship' (use 'trainee')."""
+    stored: list = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        item = dict(entry)
+        job_type = _normalize_type(item.get("type"))
+        if job_type in INTERNSHIP_WORK_TYPES or job_type in {"internship", "intern"}:
+            item["type"] = "trainee"
+        stored.append(item)
+    return stored
+
+
+# Alternate keys models sometimes return instead of "experience"
 _WORK_ENTRY_KEYS = (
+    "experience",
     "work_experience",
     "workExperience",
     "jobs",
@@ -650,6 +680,32 @@ def filter_jobs_and_internships(entries) -> list:
     else:
         entries = coerce_work_entries(entries)
     return [entry for entry in entries if is_job_or_internship(entry)]
+
+
+MONGO_CV_LEGACY_FIELD_UNSET = {
+    "internships": "",
+    "batch_intern_label": "",
+    "include_internships": "",
+    "work_experience": "",
+}
+
+
+def build_experience_array_for_storage(
+    data: dict | None,
+    *,
+    include_trainee_experience: bool = True,
+) -> list:
+    """
+    Mongo `experience` array: jobs always; trainee roles when the batch includes them.
+    Persists type \"trainee\" instead of \"internship\" on stored entries.
+    """
+    entries = filter_jobs_and_internships(coerce_work_entries(data))
+    selected: list = []
+    for entry in entries:
+        if is_internship_entry(entry) and not include_trainee_experience:
+            continue
+        selected.append(entry)
+    return experience_for_storage(selected)
 
 
 def parse_include_internships(value) -> bool:

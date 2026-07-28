@@ -3,8 +3,7 @@ import json
 import re
 from openai import OpenAI
 from app.services.utils_experience import (
-    coerce_work_entries,
-    filter_jobs_and_internships,
+    build_experience_array_for_storage,
     parse_include_internships,
     resolve_experience_months,
     resolve_intern_label,
@@ -52,7 +51,7 @@ def default_cv_result():
         "experience_years": 0.0,
         "qualifications": [],
         "profession": "",
-        "internships": []
+        "experience": []
     }
 
 
@@ -118,7 +117,7 @@ Return JSON ONLY in this format:
   "experience_months": 0,
   "qualifications": [],
   "profession": "",
-  "work_experience": []
+  "experience": []
 }}
 
 RULES:
@@ -165,23 +164,23 @@ RULES:
 
 2. EXPERIENCE:
 - Do not calculate final experience yourself.
-- Put EVERY paid/full-time/part-time job AND every internship/trainee role into "work_experience".
+- Put EVERY paid/full-time/part-time job AND every trainee role into "experience".
 - CRITICAL: Extract ALL roles from Professional Experience / Work History / Employment — never stop after the first entry, never keep only internships, never keep only the most recent job.
-- Example: Senior SE (Dec 2025–Present) + Software Engineer (Jun 2023–Nov 2025) + Technical Solutions Engineer (Mar 2022–Apr 2023) + Internship (Jul 2020–Dec 2020) → four separate objects in work_experience.
+- Example: Senior SE (Dec 2025–Present) + Software Engineer (Jun 2023–Nov 2025) + Technical Solutions Engineer (Mar 2022–Apr 2023) + Trainee (Jul 2020–Dec 2020) → four separate objects in experience.
 - Parenthetical product/system names after a job title (e.g. "(Hospital System)") do NOT make the entry a project — still type "job".
 - NEVER include personal projects, academic projects, university projects, assignments, coursework, hackathons, or capstone work.
-- Projects may still contribute skills, but they must NOT appear in work_experience and must NOT affect experience.
-- Set type to exactly "internship" or "job" for every entry (trainee/intern → "internship"; other work-history roles → "job").
-- Always extract internships when present, even if they will not count toward months.
+- Projects may still contribute skills, but they must NOT appear in experience and must NOT affect experience months.
+- Set type to exactly "trainee" or "job" for every entry (trainee/intern roles → "trainee"; other work-history roles → "job").
+- Always extract trainee roles when present, even if they will not count toward months for this batch.
 - INTERNSHIP EXPERIENCE POLICY FOR THIS BATCH: {internship_policy}
-- If a CV only lists projects and no jobs/internships, leave work_experience as [] and experience_years/experience_months as 0.
-- Set experience_years from the CV summary when stated (e.g. "4+ years" → 4.0) as a hint; Python recalculates months from all work_experience entries.
-- Python recalculates total months from work entries according to the internship policy above.
+- If a CV only lists projects and no jobs/trainee roles, leave experience as [] and experience_years/experience_months as 0.
+- Set experience_years from the CV summary when stated (e.g. "4+ years" → 4.0) as a hint; Python recalculates months from all experience entries.
+- Python recalculates total months from experience entries according to the trainee policy above.
 
 3. WORK EXPERIENCE FORMAT (one object per role; include every role):
 [
   {{
-    "type": "internship" or "job",
+    "type": "trainee" or "job",
     "company": "",
     "role": "",
     "start_date": "YYYY-MM or YYYY or Month YYYY",
@@ -229,14 +228,16 @@ OUTPUT:
         extracted = json.loads(raw_content)
 
         # Coerce alternate keys + normalize types, then keep only real jobs/internships.
-        internships = filter_jobs_and_internships(coerce_work_entries(extracted))
         # Prefer date-derived months, but never discard stated years (e.g. years=5, months=0).
         final_months = resolve_experience_months(
             extracted,
-            internships=internships,
             include_internships=include_internships,
             target_profession=target,
             target_intern_label=target_intern_label,
+        )
+        experience_stored = build_experience_array_for_storage(
+            extracted,
+            include_trainee_experience=include_internships,
         )
 
         return {
@@ -248,8 +249,8 @@ OUTPUT:
             "experience_years": round(final_months / 12, 2),
             "qualifications": clean_list(extracted.get("qualifications", []), lowercase=False),
             "profession": str(extracted.get("profession") or "").strip(),
-            "internships": internships,
-            "include_internships": include_internships,
+            "experience": experience_stored,
+            "include_trainee_experience": include_internships,
         }
 
     except Exception as e:
