@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Body, Query, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.core.auth import get_current_user
@@ -966,42 +967,9 @@ def get_shortlisted(
 # EXPORT
 # =========================
 def _persist_export_result(db: Session, batch_id: str, export_result: dict) -> dict:
-    existing = db.execute(text("""
-        SELECT id FROM batch_exports
-        WHERE batch_id = :batch_id
-        ORDER BY id DESC
-        LIMIT 1
-    """), {"batch_id": batch_id}).fetchone()
+    from app.services.export_store import persist_verified_export
 
-    if existing:
-        db.execute(text("""
-            UPDATE batch_exports
-            SET excel_file=:excel_file, created_at=:created_at
-            WHERE id=:id
-        """), {
-            "excel_file": export_result["file_path"],
-            "created_at": export_result["generated_at"],
-            "id": existing[0],
-        })
-    else:
-        db.execute(text("""
-            INSERT INTO batch_exports(batch_id, excel_file, created_at)
-            VALUES(:batch_id, :excel_file, :created_at)
-        """), {
-            "batch_id": batch_id,
-            "excel_file": export_result["file_path"],
-            "created_at": export_result["generated_at"],
-        })
-
-    db.commit()
-
-    return {
-        "success": True,
-        "excel_file": export_result["file_path"],
-        "excel_name": export_result["file_name"],
-        "created_at": export_result["generated_at"].isoformat(),
-        "generated_at_sl": export_result.get("generated_at_sl"),
-    }
+    return persist_verified_export(db, batch_id, export_result)
 
 
 def _generate_batch_export(db: Session, batch_id: str) -> dict | None:
@@ -1097,6 +1065,36 @@ def regenerate_export(
         }
 
     return _persist_export_result(db, batch_id, export_result)
+
+
+@router.get("/resume/export/{batch_id}/file")
+def download_export_file(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Regenerate verified Excel and stream it (never serves stale static exports)."""
+    require_batch_owner(db, batch_id, parse_user_id(user))
+
+    export_result = _generate_batch_export(db, batch_id)
+    if not export_result:
+        raise HTTPException(
+            status_code=404,
+            detail="No shortlisted candidates to export for this batch",
+        )
+
+    saved = _persist_export_result(db, batch_id, export_result)
+    file_path = str(saved["excel_file"]).replace("\\", "/")
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Export file not found")
+
+    return FileResponse(
+        file_path,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        filename=saved.get("excel_name") or os.path.basename(file_path),
+    )
 
 
 # =========================

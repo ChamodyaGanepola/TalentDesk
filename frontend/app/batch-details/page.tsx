@@ -99,41 +99,36 @@ function getExcelUrl(excelFile: string | null) {
   return `${API}/exports/${cleanFile.split("/").pop()}`;
 }
 
-async function regenerateAndDownloadExcel(batchId: string) {
-  const regenRes = await fetch(`${API}/resume/export/${batchId}/regenerate`, {
-    method: "POST",
+async function downloadExcelForBatch(batchId: string) {
+  const res = await fetch(`${API}/resume/export/${batchId}/file`, {
     headers: getAuthHeaders(),
   });
 
-  const data = regenRes.ok ? await regenRes.json() : null;
-  const excelPath = data?.excel_file
-    ? String(data.excel_file).replace(/\\/g, "/")
-    : null;
-
-  if (!excelPath) {
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
     throw new Error(
-      data?.message || "Excel could not be regenerated. Please try again."
+      (err as { detail?: string }).detail ||
+        "Excel could not be downloaded. Please try again."
     );
   }
 
-  const fileUrl = getExcelUrl(excelPath);
-  const res = await fetch(fileUrl, { headers: getAuthHeaders() });
-  if (!res.ok) {
-    throw new Error("Download failed");
-  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const fileName =
+    match?.[1] ||
+    `shortlisted-${batchId.slice(0, 8)}.xlsx`;
 
   const blob = await res.blob();
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download =
-    excelPath.replace(/\\/g, "/").split("/").pop() || "shortlisted.xlsx";
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   a.remove();
   window.URL.revokeObjectURL(url);
 
-  return excelPath;
+  return fileName;
 }
 
 function getUploadUrl(storedFile: string) {
@@ -317,17 +312,14 @@ function BatchDetailsContent() {
                             if (!batchId) return;
                             setDownloadingExcel(true);
                             try {
-                              const path = await regenerateAndDownloadExcel(
+                              const fileName = await downloadExcelForBatch(
                                 batchId
                               );
                               setBatch((prev) =>
                                 prev
                                   ? {
                                       ...prev,
-                                      excel_file: path,
-                                      excel_name:
-                                        path.replace(/\\/g, "/").split("/").pop() ||
-                                        prev.excel_name,
+                                      excel_name: fileName,
                                       excel_created_at: new Date().toISOString(),
                                     }
                                   : prev

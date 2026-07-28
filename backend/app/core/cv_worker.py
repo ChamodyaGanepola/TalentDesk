@@ -223,6 +223,22 @@ async def handle_batch_completion(db, batch_id):
     if not batch_completed(db, batch_id):
         return
 
+    lock_name = f"talentdesk_batch_export_{batch_id}"
+    lock_row = db.execute(
+        text("SELECT GET_LOCK(:name, 20)"),
+        {"name": lock_name},
+    ).scalar()
+    if lock_row != 1:
+        print(f"Batch export already handled elsewhere: {batch_id}")
+        return
+
+    try:
+        await _handle_batch_completion_locked(db, batch_id)
+    finally:
+        db.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": lock_name})
+
+
+async def _handle_batch_completion_locked(db, batch_id):
     print(f"Batch completed: {batch_id}")
 
     counts = db.execute(text("""
@@ -303,6 +319,8 @@ async def handle_batch_completion(db, batch_id):
                 export_result = None
 
         if export_result:
+            from app.services.export_store import persist_verified_export
+
             excel_path = export_result["file_path"]
             excel_generated_at = export_result.get("generated_at")
             excel_name = export_result.get("file_name") or os.path.basename(excel_path)
@@ -328,27 +346,15 @@ async def handle_batch_completion(db, batch_id):
                         )
                         print(f"Excel regenerated file name: {excel_name}")
 
-            if existing:
-                db.execute(text("""
-                    UPDATE batch_exports
-                    SET excel_file=:excel_file, created_at=:created_at
-                    WHERE id=:id
-                """), {
-                    "excel_file": excel_path,
-                    "created_at": excel_generated_at,
-                    "id": existing[0],
-                })
-            else:
-                db.execute(text("""
-                    INSERT INTO batch_exports(batch_id, excel_file, created_at)
-                    VALUES(:batch_id, :excel_file, :created_at)
-                """), {
-                    "batch_id": batch_id,
-                    "excel_file": excel_path,
-                    "created_at": excel_generated_at,
-                })
-            db.commit()
-            print(f"Excel saved for batch {batch_id}: {excel_path}")
+            try:
+                saved = persist_verified_export(db, batch_id, export_result)
+                excel_path = saved["excel_file"]
+                print(f"Excel saved for batch {batch_id}: {excel_path}")
+            except Exception as persist_err:
+                print("Verified Excel persist failed:", persist_err)
+                traceback.print_exc()
+                excel_path = None
+                excel_generated_at = None
         elif existing:
             excel_path = existing[1]
             print(

@@ -134,40 +134,30 @@ function ResumeViewerContent() {
   const downloadExcel = async (file: ExcelFile) => {
     setDownloadingId(file.id);
     try {
-      const regenRes = await fetch(
-        `${API}/resume/export/${file.batch_id}/regenerate`,
-        {
-          method: "POST",
-          headers: getAuthHeaders(),
-        }
+      const res = await fetch(
+        `${API}/resume/export/${file.batch_id}/file`,
+        { headers: getAuthHeaders() }
       );
 
-      const data = regenRes.ok ? await regenRes.json() : null;
-      const excelPath = data?.excel_file
-        ? String(data.excel_file).replace(/\\/g, "/")
-        : null;
-
-      if (!excelPath) {
-        throw new Error(
-          data?.message || "Excel could not be regenerated. Please try again."
-        );
-      }
-
-      const res = await fetch(getExcelUrl(excelPath), {
-        headers: getAuthHeaders(),
-      });
-
       if (!res.ok) {
-        throw new Error("Download failed");
+        const err = await res.json().catch(() => ({}));
+        const detail = (err as { detail?: string }).detail;
+        throw new Error(detail || "Excel could not be downloaded.");
       }
+
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+      const fileName =
+        match?.[1] ||
+        file.file.replace(/\\/g, "/").split("/").pop() ||
+        "resume.xlsx";
 
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
 
       const a = document.createElement("a");
       a.href = url;
-      a.download =
-        excelPath.replace(/\\/g, "/").split("/").pop() || "resume.xlsx";
+      a.download = fileName;
 
       document.body.appendChild(a);
       a.click();

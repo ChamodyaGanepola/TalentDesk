@@ -71,9 +71,14 @@ async def startup():
     finally:
         db.close()
 
-    if os.getenv("ENABLE_CV_WORKER", "true").lower() == "true":
+    if (
+        os.getenv("ENABLE_CV_WORKER", "true").lower() == "true"
+        and os.getenv("TALENTDESK_PRIMARY_API", "1") == "1"
+    ):
         asyncio.create_task(cv_worker_loop())
-        print("CV worker started")
+        print("CV worker started (primary API)")
+    else:
+        print("CV worker skipped (set TALENTDESK_PRIMARY_API=1 to enable)")
 
     from app.services.export_service import format_experience_for_excel
 

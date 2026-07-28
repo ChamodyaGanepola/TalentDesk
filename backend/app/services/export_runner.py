@@ -11,6 +11,15 @@ from pathlib import Path
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _backend_python() -> str:
+    """Always use project venv so export code matches the repo on disk."""
+    for rel in ("venv/Scripts/python.exe", "venv/bin/python"):
+        candidate = _BACKEND_ROOT / rel
+        if candidate.is_file():
+            return str(candidate)
+    return sys.executable
+
+
 def export_batch_in_subprocess(
     batch_id: str,
     *,
@@ -18,7 +27,7 @@ def export_batch_in_subprocess(
     position: str | None = None,
 ) -> dict | None:
     cmd = [
-        sys.executable,
+        _backend_python(),
         "-m",
         "app.export_runner_main",
         batch_id,
