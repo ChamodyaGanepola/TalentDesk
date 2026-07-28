@@ -171,29 +171,84 @@ def normalize_skill(skill: str) -> str:
 # Strict: known aliases + exact canonical equality.
 # No embeddings / substring (those false-match java↔javascript, aws↔azure, etc.).
 # =========================
-def skill_match_fallback(cv_skills, required_skills):
-    cv_skills_normalized = {
+def _missing_skills_fallback(cv_skills, required_skills) -> list[str]:
+    """Required skills not covered by exact/alias canonical match."""
+    cv_canonical = {
         normalize_skill(skill)
         for skill in cv_skills
         if skill and str(skill).strip()
     }
+    cv_canonical = {s for s in cv_canonical if s}
+    cv_exact = {str(s).strip().lower() for s in cv_skills if s and str(s).strip()}
 
-    required_skills_normalized = [
-        normalize_skill(skill)
-        for skill in required_skills
-        if skill and str(skill).strip()
-    ]
+    missing: list[str] = []
+    for skill in required_skills:
+        raw = str(skill or "").strip()
+        if not raw:
+            continue
+        canon = normalize_skill(raw)
+        if canon in cv_canonical or raw.lower() in cv_exact:
+            continue
+        missing.append(raw)
+    return missing
 
-    cv_skills_normalized = {s for s in cv_skills_normalized if s}
-    required_skills_normalized = [s for s in required_skills_normalized if s]
 
-    if not required_skills_normalized:
-        return True
+def skill_match_fallback(cv_skills, required_skills):
+    return len(_missing_skills_fallback(cv_skills, required_skills)) == 0
 
-    if not cv_skills_normalized:
-        return False
 
-    return all(req in cv_skills_normalized for req in required_skills_normalized)
+def skill_match_details(cv_skills, required_skills) -> dict:
+    """
+    Primary: OpenAI technology-identity matching (handles unknown aliases).
+    Fallback: small known-alias map + exact match only if OpenAI fails.
+
+    Returns {"match": bool, "missing": [required skills not found on CV]}.
+    """
+    required_skills = clean_list(required_skills)
+    cv_skills = clean_list(cv_skills)
+
+    if not required_skills:
+        return {"match": True, "missing": []}
+
+    if not cv_skills:
+        return {"match": False, "missing": list(required_skills)}
+
+    # Fast path: exact string coverage.
+    required_set = set(required_skills)
+    cv_set = set(cv_skills)
+    if required_set.issubset(cv_set):
+        return {"match": True, "missing": []}
+
+    # Fast path: known-alias canonical coverage (safe local synonyms only).
+    cv_canonical = {normalize_skill(s) for s in cv_skills if s}
+    req_canonical = [normalize_skill(s) for s in required_skills if s]
+    if req_canonical and all(r in cv_canonical for r in req_canonical):
+        return {"match": True, "missing": []}
+
+    ai_result = normalize_and_match_skills(cv_skills, required_skills)
+
+    if isinstance(ai_result, dict) and not ai_result.get("openai_failed"):
+        missing = [
+            str(m).strip()
+            for m in (ai_result.get("missing") or [])
+            if str(m).strip()
+        ]
+        is_match = bool(ai_result.get("match", False)) and len(missing) == 0
+        print(
+            "OpenAI skill match:",
+            is_match,
+            ai_result.get("reason"),
+            "missing=",
+            missing,
+        )
+        return {"match": is_match, "missing": [] if is_match else missing}
+
+    print(
+        "OpenAI skill match failed; using strict alias fallback:",
+        ai_result.get("reason") if isinstance(ai_result, dict) else ai_result,
+    )
+    missing = _missing_skills_fallback(cv_skills, required_skills)
+    return {"match": len(missing) == 0, "missing": missing}
 
 
 def skill_match(cv_skills, required_skills):
@@ -201,44 +256,7 @@ def skill_match(cv_skills, required_skills):
     Primary: OpenAI technology-identity matching (handles unknown aliases).
     Fallback: small known-alias map + exact match only if OpenAI fails.
     """
-    required_skills = clean_list(required_skills)
-    cv_skills = clean_list(cv_skills)
-
-    if not required_skills:
-        return True
-
-    if not cv_skills:
-        return False
-
-    # Fast path: exact string coverage.
-    required_set = set(required_skills)
-    cv_set = set(cv_skills)
-    if required_set.issubset(cv_set):
-        return True
-
-    # Fast path: known-alias canonical coverage (safe local synonyms only).
-    cv_canonical = {normalize_skill(s) for s in cv_skills if s}
-    req_canonical = [normalize_skill(s) for s in required_skills if s]
-    if req_canonical and all(r in cv_canonical for r in req_canonical):
-        return True
-
-    ai_result = normalize_and_match_skills(cv_skills, required_skills)
-
-    if isinstance(ai_result, dict) and not ai_result.get("openai_failed"):
-        print(
-            "OpenAI skill match:",
-            ai_result.get("match"),
-            ai_result.get("reason"),
-            "missing=",
-            ai_result.get("missing"),
-        )
-        return bool(ai_result.get("match", False))
-
-    print(
-        "OpenAI skill match failed; using strict alias fallback:",
-        ai_result.get("reason") if isinstance(ai_result, dict) else ai_result,
-    )
-    return skill_match_fallback(cv_skills, required_skills)
+    return bool(skill_match_details(cv_skills, required_skills).get("match"))
 
 
 # =========================
@@ -307,6 +325,39 @@ def qualification_vector_match(cv_quals, req_quals):
 # =========================
 # MAIN EVALUATION
 # =========================
+def _format_missing_skills(missing_skills) -> str:
+    """Comma-separated missing skills, capped for failure_reason VARCHAR(500)."""
+    items = [
+        str(s).strip()
+        for s in (missing_skills or [])
+        if s and str(s).strip()
+    ]
+    if not items:
+        return ""
+
+    # Keep room for the rest of a multi-part rejection reason.
+    max_len = 280
+    parts: list[str] = []
+    used = 0
+    omitted = 0
+    for skill in items:
+        extra = len(skill) + (2 if parts else 0)  # ", "
+        if parts and used + extra > max_len:
+            omitted += 1
+            continue
+        if not parts and len(skill) > max_len:
+            parts.append(skill[: max_len - 1] + "…")
+            used = max_len
+            omitted += len(items) - 1
+            break
+        parts.append(skill)
+        used += extra
+    text = ", ".join(parts)
+    if omitted:
+        text = f"{text} (+{omitted} more)"
+    return text
+
+
 def build_rejection_reason(
     *,
     skills_ok: bool,
@@ -315,12 +366,17 @@ def build_rejection_reason(
     cv_months: int = 0,
     exp_type: str = "minimum",
     exp_value: float | int = 0,
+    missing_skills: list | None = None,
 ) -> str:
     """Human-readable reject reasons from match flags (no OpenAI call)."""
     reasons: list[str] = []
 
     if not skills_ok:
-        reasons.append("Required skills not matched")
+        missing_text = _format_missing_skills(missing_skills)
+        if missing_text:
+            reasons.append(f"Required skills not matched (missing: {missing_text})")
+        else:
+            reasons.append("Required skills not matched")
 
     if not qual_ok:
         reasons.append("Required qualifications not matched")
@@ -378,7 +434,13 @@ def evaluate_candidate(
     required_quals = required_quals or []
 
     # Skills: OpenAI first, synonym map only if OpenAI fails
-    skills_ok = len(required_skills) == 0 or skill_match(cv_skills, required_skills)
+    if len(required_skills) == 0:
+        skills_ok = True
+        missing_skills: list[str] = []
+    else:
+        skill_details = skill_match_details(cv_skills, required_skills)
+        skills_ok = bool(skill_details.get("match"))
+        missing_skills = list(skill_details.get("missing") or [])
 
     # Experience (compare in months)
     exp_ok = check_experience(cv_months, exp_type, exp_value)
@@ -416,6 +478,7 @@ def evaluate_candidate(
             cv_months=cv_months,
             exp_type=exp_type,
             exp_value=exp_value,
+            missing_skills=missing_skills,
         )
     )
 
@@ -425,5 +488,6 @@ def evaluate_candidate(
         "skills_ok": skills_ok,
         "qual_ok": qual_ok,
         "exp_ok": exp_ok,
+        "missing_skills": missing_skills,
         "failure_reason": failure_reason,
     }
