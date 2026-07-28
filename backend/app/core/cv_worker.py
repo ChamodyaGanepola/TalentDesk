@@ -27,35 +27,19 @@ from app.ws.broadcaster import broadcast_stats
 # HELPERS
 # =========================
 def run_batch_export(*args, **kwargs):
-    """Fresh Python subprocess so stale uvicorn workers cannot write old Excel format."""
-    from app.services.export_runner import export_batch_in_subprocess
+    from app.services.export_batch import generate_batch_export
 
     batch_id = args[0] if args else kwargs.get("batch_id")
     if not batch_id:
         return None
 
-    total_cvs = kwargs.get("total_cvs")
-    if total_cvs is None and len(args) > 1:
-        total_cvs = args[1]
-
-    position = kwargs.get("position")
-    if position is None and len(args) > 2:
-        position = args[2]
-
     db = kwargs.get("db")
-    if db is not None and total_cvs is None:
-        try:
-            from sqlalchemy import text
+    total_cvs = kwargs.get("total_cvs")
+    position = kwargs.get("position")
 
-            total_cvs = db.execute(
-                text("SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id"),
-                {"batch_id": batch_id},
-            ).scalar()
-        except Exception:
-            pass
-
-    return export_batch_in_subprocess(
+    return generate_batch_export(
         batch_id,
+        db=db,
         total_cvs=total_cvs,
         position=position,
     )

@@ -17,7 +17,8 @@ import { ArrowLeft, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import AuthGuard from "@/app/components/AuthGuard";
-import { authFetch, getAuthHeaders } from "@/app/lib/auth";
+import { authFetch } from "@/app/lib/auth";
+import { downloadExcelForBatch } from "@/app/lib/downloadExcel";
 import { useToast } from "@/app/components/ui/Toast";
 
 type UploadStatus =
@@ -99,40 +100,6 @@ function getExcelUrl(excelFile: string | null) {
   return `${API}/exports/${cleanFile.split("/").pop()}`;
 }
 
-async function downloadExcelForBatch(batchId: string) {
-  const res = await authFetch(`/resume/export/${batchId}/file`);
-
-  if (!res) {
-    throw new Error("Cannot reach the server.");
-  }
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(
-      (err as { detail?: string }).detail ||
-        "Excel could not be downloaded. Please try again."
-    );
-  }
-
-  const disposition = res.headers.get("Content-Disposition") || "";
-  const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
-  const fileName =
-    match?.[1] ||
-    `shortlisted-${batchId.slice(0, 8)}.xlsx`;
-
-  const blob = await res.blob();
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.URL.revokeObjectURL(url);
-
-  return fileName;
-}
-
 function getUploadUrl(storedFile: string) {
   const cleanFile = storedFile.replace(/\\/g, "/").replace(/^\/+/, "");
 
@@ -166,9 +133,13 @@ function BatchDetailsContent() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API}/upload/batch/${batchId}`, {
-        headers: getAuthHeaders(),
-      });
+      const res = await authFetch(`/upload/batch/${batchId}`);
+
+      if (!res) {
+        setBatch(null);
+        setUploads([]);
+        return;
+      }
 
       const data = await res.json();
 
@@ -332,7 +303,9 @@ function BatchDetailsContent() {
                             } catch (err) {
                               console.error(err);
                               showToast(
-                                "Excel download failed. Please try again.",
+                                err instanceof Error
+                                  ? err.message
+                                  : "Excel download failed. Please try again.",
                                 "error"
                               );
                             } finally {

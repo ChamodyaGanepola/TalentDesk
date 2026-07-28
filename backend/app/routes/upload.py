@@ -973,29 +973,9 @@ def _persist_export_result(db: Session, batch_id: str, export_result: dict) -> d
 
 
 def _generate_batch_export(db: Session, batch_id: str) -> dict | None:
-    from app.services.export_runner import export_batch_in_subprocess
+    from app.services.export_batch import generate_batch_export
 
-    total_count = db.execute(text("""
-        SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
-    """), {"batch_id": batch_id}).scalar() or 0
-
-    batch_profession = ""
-    try:
-        batch_profession = str(
-            db.execute(text("""
-                SELECT profession FROM upload_batches
-                WHERE batch_id = :batch_id LIMIT 1
-            """), {"batch_id": batch_id}).scalar()
-            or ""
-        ).strip()
-    except Exception:
-        batch_profession = ""
-
-    return export_batch_in_subprocess(
-        batch_id,
-        total_cvs=total_count,
-        position=batch_profession,
-    )
+    return generate_batch_export(batch_id, db=db)
 
 
 @router.get("/resume/export/{batch_id}")
@@ -1083,7 +1063,13 @@ def download_export_file(
             detail="No shortlisted candidates to export for this batch",
         )
 
-    saved = _persist_export_result(db, batch_id, export_result)
+    try:
+        saved = _persist_export_result(db, batch_id, export_result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Excel export validation failed: {exc}",
+        ) from exc
     file_path = str(saved["excel_file"]).replace("\\", "/")
     if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="Export file not found")

@@ -234,6 +234,20 @@ def skill_match_details(cv_skills, required_skills) -> dict:
             if str(m).strip()
         ]
         is_match = bool(ai_result.get("match", False)) and len(missing) == 0
+        if not is_match and not missing:
+            matched_pairs = ai_result.get("matched") or []
+            matched_required = {
+                str(pair.get("required", "")).strip()
+                for pair in matched_pairs
+                if isinstance(pair, dict) and str(pair.get("required", "")).strip()
+            }
+            missing = [
+                skill
+                for skill in required_skills
+                if str(skill).strip() and str(skill).strip() not in matched_required
+            ]
+        if not is_match and not missing:
+            missing = _missing_skills_fallback(cv_skills, required_skills)
         print(
             "OpenAI skill match:",
             is_match,

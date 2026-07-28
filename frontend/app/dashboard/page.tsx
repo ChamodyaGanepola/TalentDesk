@@ -14,7 +14,7 @@ import {
 } from "@/app/lib/datetime";
 import { prefetchMasters } from "@/app/lib/mastersCache";
 import { apiFetch, getApiBase, getWsBase } from "@/app/lib/api";
-import { getAuthHeaders } from "@/app/lib/auth";
+import { authFetch, getAuthHeaders } from "@/app/lib/auth";
 import { useToast } from "@/app/components/ui/Toast";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -334,9 +334,7 @@ export default function DashboardPage() {
         if (filters.batch_id) params.set("batch_id", filters.batch_id);
         if (filters.date) params.set("date", filters.date);
 
-        const res = await apiFetch(`/upload/recent?${params.toString()}`, {
-          headers: getAuthHeaders(),
-        });
+        const res = await authFetch(`/upload/recent?${params.toString()}`);
 
         if (!res) return;
 
@@ -439,7 +437,7 @@ export default function DashboardPage() {
 
   const fetchBatches = useCallback(async () => {
     try {
-      const res = await apiFetch("/upload/batches", { headers: getAuthHeaders() });
+      const res = await authFetch("/upload/batches");
       if (!res?.ok) return;
 
       const data = await res.json();
@@ -451,7 +449,7 @@ export default function DashboardPage() {
 
   const refreshDashboard = useCallback(async () => {
     try {
-      const res = await apiFetch("/upload/stats/all", { headers: getAuthHeaders() });
+      const res = await authFetch("/upload/stats/all");
       if (!res?.ok) return;
 
       const data = await res.json();

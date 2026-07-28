@@ -8,6 +8,7 @@ import { formatSLDateTime } from "@/app/lib/datetime";
 import AuthGuard from "@/app/components/AuthGuard";
 import { useToast } from "@/app/components/ui/Toast";
 import { authFetch, getAuthHeaders } from "@/app/lib/auth";
+import { downloadExcelForBatch } from "@/app/lib/downloadExcel";
 import { Download, Filter, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
@@ -132,44 +133,15 @@ function ResumeViewerContent() {
   const downloadExcel = async (file: ExcelFile) => {
     setDownloadingId(file.id);
     try {
-      const res = await authFetch(`/resume/export/${file.batch_id}/file`);
-
-      if (!res) {
-        throw new Error("Cannot reach the server.");
-      }
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail = (err as { detail?: string }).detail;
-        throw new Error(detail || "Excel could not be downloaded.");
-      }
-
-      const disposition = res.headers.get("Content-Disposition") || "";
-      const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
-      const fileName =
-        match?.[1] ||
-        file.file.replace(/\\/g, "/").split("/").pop() ||
-        "resume.xlsx";
-
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      window.URL.revokeObjectURL(url);
+      await downloadExcelForBatch(file.batch_id);
       showToast("Excel downloaded successfully.", "success");
-
-      // Refresh list so the new filename shows up.
       fetchFiles(cursorStack[cursorStack.length - 1] ?? null);
     } catch (err) {
       console.error("Download failed:", err);
-      showToast("Download failed. Please try again.", "error");
+      showToast(
+        err instanceof Error ? err.message : "Download failed. Please try again.",
+        "error"
+      );
     } finally {
       setDownloadingId(null);
     }
