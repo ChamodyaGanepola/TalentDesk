@@ -7,7 +7,7 @@ import { ExcelListSkeleton } from "@/app/components/Skeletons";
 import { formatSLDateTime } from "@/app/lib/datetime";
 import AuthGuard from "@/app/components/AuthGuard";
 import { useToast } from "@/app/components/ui/Toast";
-import { getAuthHeaders } from "@/app/lib/auth";
+import { authFetch, getAuthHeaders } from "@/app/lib/auth";
 import { Download, Filter, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
@@ -51,10 +51,8 @@ function ResumeViewerContent() {
 
       try {
         if (batchFromUrl) {
-          const exportRes = await fetch(
-            `${API}/resume/export/${batchFromUrl}`,
-            { headers: getAuthHeaders() }
-          );
+          const exportRes = await authFetch(`/resume/export/${batchFromUrl}`);
+          if (!exportRes) throw new Error("Cannot reach the server.");
           const exportData = await exportRes.json();
 
           if (exportData?.excel_file) {
@@ -134,10 +132,11 @@ function ResumeViewerContent() {
   const downloadExcel = async (file: ExcelFile) => {
     setDownloadingId(file.id);
     try {
-      const res = await fetch(
-        `${API}/resume/export/${file.batch_id}/file`,
-        { headers: getAuthHeaders() }
-      );
+      const res = await authFetch(`/resume/export/${file.batch_id}/file`);
+
+      if (!res) {
+        throw new Error("Cannot reach the server.");
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

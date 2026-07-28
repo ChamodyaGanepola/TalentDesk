@@ -17,7 +17,7 @@ import { ArrowLeft, Download, FileSpreadsheet, Filter } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import AuthGuard from "@/app/components/AuthGuard";
-import { getAuthHeaders } from "@/app/lib/auth";
+import { authFetch, getAuthHeaders } from "@/app/lib/auth";
 import { useToast } from "@/app/components/ui/Toast";
 
 type UploadStatus =
@@ -100,9 +100,11 @@ function getExcelUrl(excelFile: string | null) {
 }
 
 async function downloadExcelForBatch(batchId: string) {
-  const res = await fetch(`${API}/resume/export/${batchId}/file`, {
-    headers: getAuthHeaders(),
-  });
+  const res = await authFetch(`/resume/export/${batchId}/file`);
+
+  if (!res) {
+    throw new Error("Cannot reach the server.");
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -181,9 +183,8 @@ function BatchDetailsContent() {
       // Regenerate export so Total Experience uses "X years Y months (N months)".
       if ((nextBatch.shortlisted || 0) > 0) {
         try {
-          const exportRes = await fetch(`${API}/resume/export/${batchId}`, {
-            headers: getAuthHeaders(),
-          });
+          const exportRes = await authFetch(`/resume/export/${batchId}`);
+          if (!exportRes) throw new Error("Cannot reach the server.");
           const exportData = await exportRes.json();
           if (exportData?.excel_file) {
             nextBatch.excel_file = String(exportData.excel_file).replace(
