@@ -75,6 +75,13 @@ async def startup():
         asyncio.create_task(cv_worker_loop())
         print("CV worker started")
 
+    from app.services.export_service import format_experience_for_excel
+
+    print(
+        "Excel experience format:",
+        format_experience_for_excel(38),
+    )
+
 
 # =========================
 # WebSocket

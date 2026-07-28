@@ -11,7 +11,7 @@ from app.db_mongo import cv_collection
 from app.services.vision_ocr import vision_ocr
 from app.services.ai_service import extract_cv_text
 from app.services.matching_service import evaluate_candidate
-from app.services.export_service import export_batch_shortlisted, slug_position
+from app.services.export_service import slug_position
 from app.services.utils_experience import (
     months_to_label,
     months_to_years_float,
@@ -26,6 +26,41 @@ from app.ws.broadcaster import broadcast_stats
 # =========================
 # HELPERS
 # =========================
+def run_batch_export(*args, **kwargs):
+    """Fresh Python subprocess so stale uvicorn workers cannot write old Excel format."""
+    from app.services.export_runner import export_batch_in_subprocess
+
+    batch_id = args[0] if args else kwargs.get("batch_id")
+    if not batch_id:
+        return None
+
+    total_cvs = kwargs.get("total_cvs")
+    if total_cvs is None and len(args) > 1:
+        total_cvs = args[1]
+
+    position = kwargs.get("position")
+    if position is None and len(args) > 2:
+        position = args[2]
+
+    db = kwargs.get("db")
+    if db is not None and total_cvs is None:
+        try:
+            from sqlalchemy import text
+
+            total_cvs = db.execute(
+                text("SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id"),
+                {"batch_id": batch_id},
+            ).scalar()
+        except Exception:
+            pass
+
+    return export_batch_in_subprocess(
+        batch_id,
+        total_cvs=total_cvs,
+        position=position,
+    )
+
+
 def parse_experience_months(
     extracted,
     *,
@@ -242,7 +277,7 @@ async def handle_batch_completion(db, batch_id):
             print("Could not load batch profession for export:", e)
 
         try:
-            export_result = export_batch_shortlisted(
+            export_result = run_batch_export(
                 batch_id,
                 total_cvs=total_count,
                 db=db,
@@ -256,7 +291,7 @@ async def handle_batch_completion(db, batch_id):
             # One retry after a short wait (Mongo write lag).
             try:
                 await asyncio.sleep(1)
-                export_result = export_batch_shortlisted(
+                export_result = run_batch_export(
                     batch_id,
                     total_cvs=total_count,
                     db=db,
@@ -279,7 +314,7 @@ async def handle_batch_completion(db, batch_id):
                         f"ERROR: Excel missing position slug '{slug}' in '{excel_name}' "
                         f"— regenerating once"
                     )
-                    export_result = export_batch_shortlisted(
+                    export_result = run_batch_export(
                         batch_id,
                         total_cvs=total_count,
                         db=db,

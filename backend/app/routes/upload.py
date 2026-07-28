@@ -1005,7 +1005,7 @@ def _persist_export_result(db: Session, batch_id: str, export_result: dict) -> d
 
 
 def _generate_batch_export(db: Session, batch_id: str) -> dict | None:
-    from app.services.export_service import export_batch_shortlisted
+    from app.services.export_runner import export_batch_in_subprocess
 
     total_count = db.execute(text("""
         SELECT COUNT(*) FROM uploads WHERE batch_id = :batch_id
@@ -1023,10 +1023,9 @@ def _generate_batch_export(db: Session, batch_id: str) -> dict | None:
     except Exception:
         batch_profession = ""
 
-    return export_batch_shortlisted(
+    return export_batch_in_subprocess(
         batch_id,
         total_cvs=total_count,
-        db=db,
         position=batch_profession,
     )
 
@@ -1047,6 +1046,18 @@ def get_export(
             "excel_file": saved["excel_file"],
             "created_at": saved["created_at"],
             "excel_name": saved.get("excel_name"),
+        }
+
+    shortlisted_count = db.execute(text("""
+        SELECT COUNT(*) FROM uploads
+        WHERE batch_id = :batch_id AND status = 'Shortlisted'
+    """), {"batch_id": batch_id}).scalar() or 0
+
+    if shortlisted_count > 0:
+        return {
+            "excel_file": None,
+            "created_at": None,
+            "message": "Could not regenerate Excel export. Restart the API server and try again.",
         }
 
     row = db.execute(text("""

@@ -1,4 +1,4 @@
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 from app.db_mongo import cv_collection
 from app.services.utils_experience import months_to_label, resolve_experience_months
@@ -9,6 +9,7 @@ import os
 import re
 
 EXPORT_DIR = "exports"
+EXPERIENCE_COLUMN_HEADER = "Total Experience"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
@@ -165,6 +166,29 @@ def format_experience_for_excel(total_months, label: str | None = None) -> str:
 
     unit = "month" if months == 1 else "months"
     return f"{text} ({months} {unit})"
+
+
+def verify_shortlisted_export(file_path: str) -> None:
+    """Reject stale/outdated Excel writers (wrong header or raw month integers)."""
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        ws = wb.active
+        header = str(ws.cell(1, 8).value or "").strip()
+        if header != EXPERIENCE_COLUMN_HEADER:
+            raise RuntimeError(
+                f"Excel export outdated (column H header {header!r}); "
+                f"expected {EXPERIENCE_COLUMN_HEADER!r}"
+            )
+        if ws.max_row >= 2:
+            cell = ws.cell(2, 8).value
+            if cell is not None and cell != "":
+                text = str(cell).strip()
+                if text.isdigit() or "(" not in text:
+                    raise RuntimeError(
+                        f"Excel experience cell not formatted: {text!r}"
+                    )
+    finally:
+        wb.close()
 
 
 def _is_shortlisted(status) -> bool:
@@ -363,7 +387,7 @@ def export_batch_shortlisted(
         "Email Address",
         "Contact No",
         "Skills",
-        "Total Experience",
+        EXPERIENCE_COLUMN_HEADER,
         "Professional Qualifications",
         "CV Profession",
     ]
@@ -449,6 +473,7 @@ def export_batch_shortlisted(
         )
 
     wb.save(file_path)
+    verify_shortlisted_export(file_path)
 
     print(
         f"Excel generated: {file_name} "
