@@ -152,6 +152,8 @@ function ResumeViewerContent() {
           data?.message || "Excel could not be regenerated. Please try again."
         );
       }
+
+      const res = await fetch(getExcelUrl(excelPath), {
         headers: getAuthHeaders(),
       });
 
