@@ -5,6 +5,7 @@ import json
 import re
 from openai import OpenAI
 from app.services.utils_experience import (
+    coerce_work_entries,
     filter_jobs_and_internships,
     parse_include_internships,
     resolve_experience_months,
@@ -163,23 +164,27 @@ Return ONLY valid JSON:
   "experience_months": 0,
   "qualifications": [],
   "profession": "",
-  "internships": []
+  "work_experience": []
 }}
 
 RULES:
 
 1. EXPERIENCE:
 - Do not calculate final experience.
-- Extract ONLY real internships and paid/full-time/part-time jobs into internships.
-- NEVER include personal/academic/university projects, assignments, coursework, hackathons, or capstones in internships.
+- Put EVERY paid/full-time/part-time job AND every internship/trainee role into "work_experience".
+- CRITICAL: Extract ALL roles — never stop after the first entry, never keep only internships, never keep only the most recent job.
+- Example: Senior SE (2025–Present) + Software Engineer (2023–2025) + Technical Solutions Engineer (2022–2023) + Internship (2020) → 4 entries.
+- Parenthetical product/system names (e.g. "(Hospital System)") still mean type "job", not a project.
+- NEVER include personal/academic/university projects, assignments, coursework, hackathons, or capstones.
 - Projects can contribute skills only; they must not affect experience months.
-- Set type to exactly "internship" or "job".
+- Set type to exactly "internship" or "job" (trainee/intern → internship; other work-history roles → job).
 - Always extract internships when present, even if they will not count toward months.
 - INTERNSHIP EXPERIENCE POLICY FOR THIS BATCH: {internship_policy}
-- If there are no jobs/internships, leave internships as [] and experience fields as 0.
+- If there are no jobs/internships, leave work_experience as [] and experience fields as 0.
+- Set experience_years from summary text when stated (e.g. "4+ years" → 4.0); Python recalculates from all work_experience entries.
 - Python recalculates months from work entries according to the internship policy above.
 
-2. INTERNSHIPS/JOBS FORMAT:
+2. WORK EXPERIENCE FORMAT (one object per role; include every role):
 [
   {{
     "type": "internship" or "job",
@@ -232,7 +237,12 @@ OUTPUT:
                     "content": [
                         {
                             "type": "text",
-                            "text": "Extract full CV accurately from all pages."
+                            "text": (
+                                "Extract the full CV accurately from all pages. "
+                                "In work_experience, include EVERY job and "
+                                "internship under Professional Experience "
+                                "(each employer/role as its own object)."
+                            )
                         },
                         *image_payload
                     ]
@@ -246,7 +256,7 @@ OUTPUT:
         if not data:
             return default_cv_result()
 
-        internships = filter_jobs_and_internships(data.get("internships", []))
+        internships = filter_jobs_and_internships(coerce_work_entries(data))
         final_months = resolve_experience_months(
             data,
             internships=internships,

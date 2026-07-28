@@ -122,7 +122,10 @@ def resolve_experience_months(
     total cannot override the edited intern role.
     """
     data = data if isinstance(data, dict) else {}
-    jobs = internships if internships is not None else data.get("internships")
+    if internships is not None:
+        jobs = coerce_work_entries(internships)
+    else:
+        jobs = coerce_work_entries(data)
 
     calculated = 0
     if jobs:
@@ -142,11 +145,18 @@ def resolve_experience_months(
         bool(track) and track.lower() != "intern"
     )
 
-    # Filtered path: always trust date-derived months for the selected intern
-    # role. Never fall back to AI stated totals — those often include excluded
-    # internships (e.g. SE Intern when filter is "AI Engineer Intern").
+    has_paid_job = any(
+        not is_internship_entry(job) for job in filter_jobs_and_internships(jobs)
+    )
+
+    # Filtered path: prefer date-derived months so AI stated totals cannot
+    # override an internship include/exclude or intern-role filter.
+    # If the model only returned internships but the CV stated multi-year
+    # experience, fall back to stated months (jobs were likely missed).
     if internship_filter_active and jobs is not None:
-        return calculated
+        if has_paid_job or stated <= 0:
+            return calculated
+        return max(calculated, stated)
 
     return max(calculated, stated)
 
@@ -206,14 +216,36 @@ ALLOWED_WORK_TYPES = {
     "work",
     "full-time",
     "full time",
+    "fulltime",
     "part-time",
     "part time",
+    "parttime",
     "employment",
     "employee",
     "trainee",
     "apprenticeship",
     "apprentice",
+    "contract",
+    "contractor",
+    "consultant",
+    "permanent",
+    "freelance",
+    "freelancer",
+    "self-employed",
+    "self employed",
 }
+
+# Alternate keys models sometimes return instead of "internships"
+_WORK_ENTRY_KEYS = (
+    "work_experience",
+    "workExperience",
+    "jobs",
+    "experiences",
+    "employment",
+    "professional_experience",
+    "professionalExperience",
+    "internships",
+)
 
 INTERNSHIP_WORK_TYPES = {
     "internship",
@@ -463,6 +495,107 @@ def internship_matches_profession(
     return False
 
 
+def normalize_work_entry(entry) -> dict | None:
+    """
+    Normalize a work entry so type is job/internship when possible.
+    Blank or synonym types with employer/dates become countable jobs.
+    """
+    if not isinstance(entry, dict):
+        return None
+
+    out = dict(entry)
+    job_type = _normalize_type(out.get("type"))
+    role = _normalize_type(out.get("role") or out.get("title"))
+    company = _normalize_type(out.get("company") or out.get("organization"))
+    blob = f"{role} {company}"
+
+    # Map common synonyms onto allowed types
+    if job_type in {
+        "fulltime",
+        "full-time",
+        "full time",
+        "parttime",
+        "part-time",
+        "part time",
+        "permanent",
+        "contract",
+        "contractor",
+        "consultant",
+        "freelance",
+        "freelancer",
+        "self-employed",
+        "self employed",
+        "paid job",
+        "work",
+        "employment",
+        "employee",
+    }:
+        out["type"] = "job"
+        job_type = "job"
+    elif job_type in INTERNSHIP_WORK_TYPES:
+        out["type"] = "internship"
+        job_type = "internship"
+
+    if not job_type:
+        if ("intern" in role and "internal" not in role) or any(
+            t in role for t in ("trainee", "apprentice")
+        ):
+            out["type"] = "internship"
+            job_type = "internship"
+        elif company or out.get("start_date") or out.get("end_date"):
+            projectish = any(
+                t in blob
+                for t in (
+                    "personal project",
+                    "academic project",
+                    "university project",
+                    "hackathon",
+                    "capstone",
+                    "coursework",
+                    "assignment",
+                )
+            )
+            if projectish and "project manager" not in blob:
+                out["type"] = "project"
+                job_type = "project"
+            else:
+                out["type"] = "job"
+                job_type = "job"
+
+    # Keep role/company keys consistent for downstream matching
+    if not out.get("role") and out.get("title"):
+        out["role"] = out.get("title")
+    if not out.get("company") and out.get("organization"):
+        out["company"] = out.get("organization")
+
+    return out
+
+
+def coerce_work_entries(data) -> list:
+    """
+    Collect work entries from work_experience / internships / common
+    alternate keys. Prefer the longest non-empty list. Normalize types.
+    """
+    if isinstance(data, list):
+        raw = data
+    elif isinstance(data, dict):
+        candidates = [
+            value
+            for key in _WORK_ENTRY_KEYS
+            if isinstance((value := data.get(key)), list) and value
+        ]
+        raw = max(candidates, key=len) if candidates else []
+    else:
+        raw = []
+
+    normalized = []
+    for entry in raw:
+        item = normalize_work_entry(entry)
+        if item is not None:
+            normalized.append(item)
+    return normalized
+
+
 def is_job_or_internship(entry) -> bool:
     """
     Only real jobs and internships count toward experience.
@@ -471,6 +604,7 @@ def is_job_or_internship(entry) -> bool:
     if not isinstance(entry, dict):
         return False
 
+    entry = normalize_work_entry(entry) or entry
     job_type = _normalize_type(entry.get("type"))
     role = _normalize_type(entry.get("role") or entry.get("title"))
     company = _normalize_type(entry.get("company") or entry.get("organization"))
@@ -509,8 +643,12 @@ def is_job_or_internship(entry) -> bool:
 
 def filter_jobs_and_internships(entries) -> list:
     """Return only internship/job entries suitable for experience calculation."""
-    if not isinstance(entries, list):
+    if isinstance(entries, dict):
+        entries = coerce_work_entries(entries)
+    elif not isinstance(entries, list):
         return []
+    else:
+        entries = coerce_work_entries(entries)
     return [entry for entry in entries if is_job_or_internship(entry)]
 
 
@@ -531,6 +669,52 @@ def parse_include_internships(value) -> bool:
     return True
 
 
+def _entry_date_range(job) -> tuple[datetime, datetime] | None:
+    """Parse a work entry into a (start, end) range, or None if unusable."""
+    start = parse_date(job.get("start_date"))
+    end = parse_date(job.get("end_date"))
+
+    if not start:
+        return None
+
+    if not end:
+        end = now_sri_lanka().replace(tzinfo=None)
+    else:
+        # Year-only end dates parse as Jan 1; treat as end of that year.
+        end_raw = str(job.get("end_date") or "").strip()
+        if re.fullmatch(r"\d{4}", end_raw):
+            end = end.replace(month=12, day=31)
+
+    if end < start:
+        return None
+    return start, end
+
+
+def _months_between(start: datetime, end: datetime) -> int:
+    """Month span matching prior inclusive-ish behavior (Jan→Jan ≈ 12)."""
+    if start == end:
+        return 1
+    diff = (end.year - start.year) * 12 + (end.month - start.month)
+    return max(diff, 1) if diff >= 0 else 0
+
+
+def _merge_month_ranges(ranges: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    """Union overlapping/adjacent date ranges so concurrent jobs are not double-counted."""
+    if not ranges:
+        return []
+
+    ordered = sorted(ranges, key=lambda r: (r[0], r[1]))
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        # Adjacent months (end == next start) still merge for calendar continuity.
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def calculate_experience_months(
     internships,
     include_internships: bool = True,
@@ -541,12 +725,14 @@ def calculate_experience_months(
     Counts jobs always.
     Counts internships only when include_internships is True.
     When a profession/intern label is set, only related internships count.
+    Multiple roles are all included; overlapping ranges are merged so
+    calendar months are not double-counted.
     """
-    total_months = 0
     profession = " ".join(str(target_profession or "").strip().split())
     intern_label = " ".join(str(target_intern_label or "").strip().split())
     track = resolve_intern_label(profession, intern_label)
 
+    ranges: list[tuple[datetime, datetime]] = []
     for job in filter_jobs_and_internships(internships):
         if is_internship_entry(job):
             if not include_internships:
@@ -557,27 +743,13 @@ def calculate_experience_months(
                 ):
                     continue
 
-        start = parse_date(job.get("start_date"))
-        end = parse_date(job.get("end_date"))
+        span = _entry_date_range(job)
+        if span:
+            ranges.append(span)
 
-        if not start:
-            continue
-
-        if not end:
-            end = now_sri_lanka().replace(tzinfo=None)
-        else:
-            # Year-only end dates parse as Jan 1; treat as end of that year.
-            end_raw = str(job.get("end_date") or "").strip()
-            if re.fullmatch(r"\d{4}", end_raw):
-                end = end.replace(month=12, day=31)
-
-        diff_months = (end.year - start.year) * 12 + (end.month - start.month)
-        # Inclusive-ish month span: Jan 2020 → Jan 2021 ≈ 12 months.
-        if diff_months >= 0:
-            total_months += max(diff_months, 1) if start != end else 1
-        # keep previous behavior for inverted ranges: skip
-        elif diff_months < 0:
-            continue
+    total_months = 0
+    for start, end in _merge_month_ranges(ranges):
+        total_months += _months_between(start, end)
 
     return int(total_months)
 
